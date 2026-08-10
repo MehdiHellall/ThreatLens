@@ -10,6 +10,8 @@ from web.backend.settings import MAX_TEXT_CHARS
 
 RiskLevel = Literal["low", "medium", "high"]
 ThreatLabel = Literal["ham", "phish", "spam"]
+Agreement = Literal["agreed", "disagreed", "unavailable", "partial"]
+ModelStatus = Literal["available", "unavailable", "error"]
 
 
 class HealthResponse(BaseModel):
@@ -17,6 +19,16 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     model_path: str | None
     detail: str
+
+
+class ModelAvailability(BaseModel):
+    available: bool
+    detail: str
+
+
+class ReadyResponse(HealthResponse):
+    duel_ready: bool
+    models: dict[str, ModelAvailability]
 
 
 class LiveResponse(BaseModel):
@@ -32,6 +44,10 @@ class MetadataResponse(BaseModel):
     model: dict[str, object]
     metrics: dict[str, object] | None
     privacy: str
+
+
+class VersionedMetadataResponse(MetadataResponse):
+    models: dict[str, dict[str, object]]
 
 
 class PredictRequest(BaseModel):
@@ -61,9 +77,11 @@ class PredictResponse(BaseModel):
 
 
 class ModelPredictionOutput(BaseModel):
-    label: ThreatLabel
+    status: ModelStatus
+    label: ThreatLabel | None
     confidence: float | None
     probabilities: dict[str, float] | None
+    detail: str
 
 
 class ArtifactMetadata(BaseModel):
@@ -75,12 +93,14 @@ class ArtifactMetadata(BaseModel):
 
 
 class VersionedPredictResponse(BaseModel):
-    """Duel-ready response with the currently deployed model as its sole output."""
+    """Versioned result containing the two honest Model Duel outputs."""
 
     final_label: ThreatLabel
     final_risk_level: RiskLevel
     final_confidence: float | None
-    model_outputs: dict[Literal["tfidf_logreg"], ModelPredictionOutput]
+    agreement: Agreement
+    model_outputs: dict[str, ModelPredictionOutput]
     explanation: str
     suggested_action: str
     artifact_metadata: ArtifactMetadata
+    model_manifests: dict[str, dict[str, object] | None]

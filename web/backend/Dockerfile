@@ -14,7 +14,7 @@ COPY web/__init__.py ./web/__init__.py
 COPY web/backend ./web/backend
 
 RUN python -m pip install --upgrade pip && \
-    python -m pip install ".[web]" && \
+    python -m pip install ".[web,distilbert-runtime]" && \
     useradd --create-home --shell /usr/sbin/nologin threatlens
 
 EXPOSE 8000

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from web.backend import main as backend_main
 from web.backend.main import AppSettings, create_app
 from web.backend.model import save_model
+from web.backend.runtimes import distilbert_runtime
 
 CHECKED_IN_ARTIFACT = Path(__file__).resolve().parents[1] / "artifacts" / "tfidf_logreg.joblib"
 CHECKED_IN_PHISH_SAMPLE = (
@@ -45,6 +46,32 @@ class NumericClassThreatModel:
 class QuietStaticFileHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         return
+
+
+class StubDistilBertRuntime:
+    def __init__(
+        self,
+        prediction: distilbert_runtime.DistilBertPrediction | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.prediction = prediction
+        self.error = error
+        self.calls = 0
+
+    def predict_one(self, _text: str) -> distilbert_runtime.DistilBertPrediction:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        assert self.prediction is not None
+        return self.prediction
+
+
+class StubDistilBertService:
+    def __init__(self, state: distilbert_runtime.DistilBertState) -> None:
+        self.state = state
+
+    def get_state(self) -> distilbert_runtime.DistilBertState:
+        return self.state
 
 
 @pytest.fixture()
@@ -88,6 +115,50 @@ def artifact_server(tmp_path: Path):
 def _client(model_path: Path) -> TestClient:
     app = create_app(AppSettings(model_path=model_path))
     return TestClient(app)
+
+
+def _distilbert_state(
+    *,
+    prediction: distilbert_runtime.DistilBertPrediction | None = None,
+    error: Exception | None = None,
+    load_error: str | None = None,
+) -> tuple[distilbert_runtime.DistilBertState, StubDistilBertRuntime | None]:
+    if load_error is not None:
+        return (
+            distilbert_runtime.DistilBertState(
+                runtime=None,
+                path=None,
+                manifest={},
+                error=load_error,
+            ),
+            None,
+        )
+    runtime = StubDistilBertRuntime(prediction=prediction, error=error)
+    return (
+        distilbert_runtime.DistilBertState(
+            runtime=runtime,
+            path=Path("artifacts/distilbert"),
+            manifest={
+                "training_complete": True,
+                "base_checkpoint": "distilbert/distilbert-base-uncased",
+                "max_length": 128,
+            },
+            error=None,
+        ),
+        runtime,
+    )
+
+
+def _duel_client(
+    artifact_path: Path,
+    state: distilbert_runtime.DistilBertState,
+) -> TestClient:
+    return TestClient(
+        create_app(
+            AppSettings(model_path=artifact_path),
+            distilbert_service=StubDistilBertService(state),
+        )
+    )
 
 
 def test_health_reports_loaded_model(artifact_path: Path) -> None:
@@ -261,17 +332,21 @@ def test_v1_ready_preserves_health_contract(artifact_path: Path) -> None:
     legacy = client.get("/health")
     versioned = client.get("/v1/ready")
 
+    assert legacy.status_code == 200
+    assert legacy.json() == {
+        "status": "ok",
+        "model_loaded": True,
+        "model_path": "threat-model.joblib",
+        "detail": "Model artifact loaded.",
+    }
     assert versioned.status_code == 200
-    assert (
-        versioned.json()
-        == legacy.json()
-        == {
-            "status": "ok",
-            "model_loaded": True,
-            "model_path": "threat-model.joblib",
-            "detail": "Model artifact loaded.",
-        }
-    )
+    body = versioned.json()
+    assert body["status"] == "ok"
+    assert body["model_loaded"] is True
+    assert body["duel_ready"] is False
+    assert set(body["models"]) == {"tfidf_logreg", "distilbert"}
+    assert body["models"]["tfidf_logreg"]["available"] is True
+    assert body["models"]["distilbert"]["available"] is False
 
 
 def test_v1_metadata_preserves_public_metadata_contract(artifact_path: Path) -> None:
@@ -280,9 +355,8 @@ def test_v1_metadata_preserves_public_metadata_contract(artifact_path: Path) -> 
     legacy = client.get("/metadata")
     versioned = client.get("/v1/metadata")
 
-    assert versioned.status_code == 200
-    assert versioned.json() == legacy.json()
-    assert set(versioned.json()) == {
+    assert legacy.status_code == 200
+    assert set(legacy.json()) == {
         "app_name",
         "labels",
         "max_text_chars",
@@ -290,6 +364,10 @@ def test_v1_metadata_preserves_public_metadata_contract(artifact_path: Path) -> 
         "metrics",
         "privacy",
     }
+    assert versioned.status_code == 200
+    assert set(versioned.json()["models"]) == {"tfidf_logreg", "distilbert"}
+    assert versioned.json()["models"]["tfidf_logreg"]["available"] is True
+    assert versioned.json()["models"]["distilbert"]["available"] is False
     assert versioned.json()["model"] == {
         "loaded": True,
         "artifact": "threat-model.joblib",
@@ -332,17 +410,35 @@ def test_v1_predict_has_duel_ready_shape_and_preserves_legacy_result(
         "final_label",
         "final_risk_level",
         "final_confidence",
+        "agreement",
         "model_outputs",
         "explanation",
         "suggested_action",
         "artifact_metadata",
+        "model_manifests",
     }
-    assert set(body["model_outputs"]) == {"tfidf_logreg"}
+    assert set(body["model_outputs"]) == {"tfidf_logreg", "distilbert"}
     assert set(body["model_outputs"]["tfidf_logreg"]) == {
+        "status",
         "label",
         "confidence",
         "probabilities",
+        "detail",
     }
+    assert set(body["model_outputs"]["distilbert"]) == {
+        "status",
+        "label",
+        "confidence",
+        "probabilities",
+        "detail",
+    }
+    assert body["agreement"] == "unavailable"
+    assert body["model_outputs"]["distilbert"]["status"] == "unavailable"
+    assert body["model_outputs"]["distilbert"]["label"] is None
+    assert body["model_outputs"]["distilbert"]["confidence"] is None
+    assert body["model_outputs"]["distilbert"]["probabilities"] is None
+    assert body["model_outputs"]["distilbert"]["detail"]
+    assert set(body["model_manifests"]) == {"tfidf_logreg", "distilbert"}
     assert body["artifact_metadata"] == {
         "artifact": "threat-model.joblib",
         "model_name": "test_model",
@@ -352,12 +448,175 @@ def test_v1_predict_has_duel_ready_shape_and_preserves_legacy_result(
     assert body["final_risk_level"] == expected_legacy["risk_level"]
     assert body["final_confidence"] == expected_legacy["probabilities"]["phish"]
     assert body["model_outputs"]["tfidf_logreg"] == {
+        "status": "available",
         "label": expected_legacy["label"],
         "confidence": expected_legacy["probabilities"]["phish"],
         "probabilities": expected_legacy["probabilities"],
+        "detail": "Prediction completed.",
     }
-    assert body["explanation"] == expected_legacy["explanation"]
+    assert expected_legacy["explanation"] in body["explanation"]
+    assert "DistilBERT" in body["explanation"]
+    assert "unavailable" in body["explanation"].casefold()
     assert body["suggested_action"] == expected_legacy["suggested_action"]
+
+
+def test_v1_duel_agreement_selects_real_distilbert_result(artifact_path: Path) -> None:
+    state, _runtime = _distilbert_state(
+        prediction=distilbert_runtime.DistilBertPrediction(
+            label="phish",
+            probabilities={"ham": 0.05, "phish": 0.88, "spam": 0.07},
+        )
+    )
+
+    response = _duel_client(artifact_path, state).post(
+        "/v1/predict",
+        json={"text": "Urgent password reset required verify account."},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["agreement"] == "agreed"
+    assert body["final_label"] == "phish"
+    assert body["final_confidence"] == 0.88
+    assert body["model_outputs"]["tfidf_logreg"]["label"] == "phish"
+    assert body["model_outputs"]["distilbert"] == {
+        "status": "available",
+        "label": "phish",
+        "confidence": 0.88,
+        "probabilities": {"ham": 0.05, "phish": 0.88, "spam": 0.07},
+        "detail": "Prediction completed.",
+    }
+    assert "TF-IDF" in body["explanation"]
+    assert "DistilBERT" in body["explanation"]
+
+
+def test_v1_duel_disagreement_is_visible_and_distilbert_is_final(
+    artifact_path: Path,
+) -> None:
+    state, _runtime = _distilbert_state(
+        prediction=distilbert_runtime.DistilBertPrediction(
+            label="spam",
+            probabilities={"ham": 0.08, "phish": 0.2, "spam": 0.72},
+        )
+    )
+
+    response = _duel_client(artifact_path, state).post(
+        "/v1/predict",
+        json={"text": "Urgent password reset required verify account."},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["agreement"] == "disagreed"
+    assert body["model_outputs"]["tfidf_logreg"]["label"] == "phish"
+    assert body["model_outputs"]["distilbert"]["label"] == "spam"
+    assert body["final_label"] == "spam"
+    assert body["final_confidence"] == 0.72
+    assert body["final_risk_level"] == "medium"
+    assert "spam" in body["suggested_action"].casefold()
+    assert "disagree" in body["explanation"].casefold()
+    assert "manual" in body["explanation"].casefold()
+
+
+def test_v1_duel_unavailable_falls_back_without_inventing_probabilities(
+    artifact_path: Path,
+) -> None:
+    state, _runtime = _distilbert_state(load_error="Fine-tuned artifact is not configured.")
+
+    response = _duel_client(artifact_path, state).post(
+        "/v1/predict",
+        json={"text": "Urgent password reset required verify account."},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["agreement"] == "unavailable"
+    assert body["final_label"] == "phish"
+    assert body["final_confidence"] == 0.92
+    assert body["model_outputs"]["distilbert"] == {
+        "status": "unavailable",
+        "label": None,
+        "confidence": None,
+        "probabilities": None,
+        "detail": "Fine-tuned artifact is not configured.",
+    }
+    assert "TF-IDF" in body["explanation"]
+    assert "unavailable" in body["explanation"].casefold()
+
+
+def test_v1_duel_runtime_failure_is_partial_and_does_not_leak_error(
+    artifact_path: Path,
+) -> None:
+    state, _runtime = _distilbert_state(
+        error=RuntimeError("secret submitted text and internal path C:/private/model")
+    )
+
+    response = _duel_client(artifact_path, state).post(
+        "/v1/predict",
+        json={"text": "Urgent password reset required verify account."},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["agreement"] == "partial"
+    assert body["final_label"] == "phish"
+    assert body["model_outputs"]["distilbert"]["status"] == "error"
+    assert body["model_outputs"]["distilbert"]["label"] is None
+    assert "secret submitted" not in str(body)
+    assert "C:/private" not in str(body)
+
+
+def test_legacy_predict_stays_tfidf_only_and_never_invokes_distilbert(
+    artifact_path: Path,
+) -> None:
+    state, distilbert = _distilbert_state(
+        error=AssertionError("legacy prediction must not call DistilBERT")
+    )
+    assert distilbert is not None
+
+    response = _duel_client(artifact_path, state).post(
+        "/predict",
+        json={"text": "Urgent password reset required verify account."},
+    )
+
+    assert response.status_code == 200
+    assert set(response.json()) == {
+        "label",
+        "probabilities",
+        "risk_level",
+        "explanation",
+        "suggested_action",
+    }
+    assert response.json()["label"] == "phish"
+    assert distilbert.calls == 0
+
+
+def test_v1_ready_and_metadata_report_available_distilbert_without_private_paths(
+    artifact_path: Path,
+) -> None:
+    state, _runtime = _distilbert_state(
+        prediction=distilbert_runtime.DistilBertPrediction(
+            label="ham",
+            probabilities={"ham": 0.9, "phish": 0.04, "spam": 0.06},
+        )
+    )
+    client = _duel_client(artifact_path, state)
+
+    ready = client.get("/v1/ready")
+    metadata = client.get("/v1/metadata")
+
+    assert ready.status_code == 200
+    assert ready.json()["duel_ready"] is True
+    assert ready.json()["models"]["distilbert"]["available"] is True
+    assert metadata.status_code == 200
+    assert set(metadata.json()["models"]) == {"tfidf_logreg", "distilbert"}
+    assert metadata.json()["models"]["distilbert"]["available"] is True
+    assert metadata.json()["models"]["distilbert"]["manifest"] == {
+        "training_complete": True,
+        "base_checkpoint": "distilbert/distilbert-base-uncased",
+        "max_length": 128,
+    }
+    assert "artifacts/distilbert" not in str(metadata.json())
 
 
 def test_predict_normalizes_numeric_class_probabilities(tmp_path: Path) -> None:

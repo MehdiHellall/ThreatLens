@@ -131,16 +131,32 @@ def _is_loopback_host(host: str | None) -> bool:
 
 
 def validate_remote_artifact_settings(url: str, expected_sha256: str | None) -> None:
+    _validate_download_url(url)
+    if expected_sha256 is None:
+        raise ModelArtifactError(f"{MODEL_SHA256_ENV} is required for remote model artifacts.")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
+        raise ModelArtifactError(f"{MODEL_SHA256_ENV} must be a 64-character hex SHA-256 digest.")
+
+
+def _validate_download_url(url: str) -> None:
     parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme not in {"http", "https"}:
+        raise ModelArtifactError("Model artifact URL must use http or https.")
     is_loopback_http = parsed_url.scheme == "http" and _is_loopback_host(parsed_url.hostname)
     if parsed_url.scheme != "https" and not is_loopback_http:
         raise ModelArtifactError(
             "Remote model artifact URL must use https, except loopback URLs used for local tests."
         )
-    if expected_sha256 is None:
-        raise ModelArtifactError(f"{MODEL_SHA256_ENV} is required for remote model artifacts.")
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
-        raise ModelArtifactError(f"{MODEL_SHA256_ENV} must be a 64-character hex SHA-256 digest.")
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+def _open_url_no_redirect(url: str, *, timeout: int) -> Any:
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    return opener.open(url, timeout=timeout)
 
 
 def _declared_content_length(response: Any) -> int | None:
@@ -161,15 +177,13 @@ def _download_model_artifact(
     destination: Path,
     max_artifact_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
 ) -> Path:
-    parsed_url = urllib.parse.urlparse(url)
-    if parsed_url.scheme not in {"http", "https"}:
-        raise ModelArtifactError("Model artifact URL must use http or https.")
+    _validate_download_url(url)
 
     partial_destination = destination.with_suffix(f"{destination.suffix}.partial")
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with (
-            urllib.request.urlopen(url, timeout=120) as response,
+            _open_url_no_redirect(url, timeout=120) as response,
             partial_destination.open("wb") as file,
         ):
             declared_bytes = _declared_content_length(response)

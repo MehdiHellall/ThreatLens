@@ -63,9 +63,11 @@ def test_v1_prediction_supports_artifact_without_probabilities(tmp_path: Path) -
     assert response.json()["final_risk_level"] == "low"
     assert response.json()["final_confidence"] is None
     assert response.json()["model_outputs"]["tfidf_logreg"] == {
+        "status": "available",
         "label": "ham",
         "confidence": None,
         "probabilities": None,
+        "detail": "Prediction completed.",
     }
     assert "with" not in response.json()["explanation"].split(". No obvious", maxsplit=1)[0]
 
@@ -125,7 +127,7 @@ def test_artifact_downloader_removes_partial_file_after_network_error(
         destination.with_suffix(".joblib.partial").write_bytes(b"partial")
         raise urllib.error.URLError("offline")
 
-    monkeypatch.setattr(runtime.urllib.request, "urlopen", fail_download)
+    monkeypatch.setattr(runtime, "_open_url_no_redirect", fail_download)
 
     with pytest.raises(runtime.ModelArtifactError, match="URLError"):
         runtime._download_model_artifact("https://models.example/model.joblib", destination)
@@ -139,7 +141,7 @@ def test_artifact_downloader_rejects_declared_oversized_body(
 ) -> None:
     destination = tmp_path / "cache" / "model.joblib"
     response = StubHTTPResponse(b"small", content_length=11)
-    monkeypatch.setattr(runtime.urllib.request, "urlopen", lambda _url, timeout: response)
+    monkeypatch.setattr(runtime, "_open_url_no_redirect", lambda _url, timeout: response)
 
     with pytest.raises(runtime.ModelArtifactError, match="exceeds maximum artifact size"):
         runtime._download_model_artifact(
@@ -158,7 +160,7 @@ def test_artifact_downloader_rejects_oversized_stream_and_deletes_partial(
 ) -> None:
     destination = tmp_path / "cache" / "model.joblib"
     response = StubHTTPResponse(b"streamed body", content_length=None)
-    monkeypatch.setattr(runtime.urllib.request, "urlopen", lambda _url, timeout: response)
+    monkeypatch.setattr(runtime, "_open_url_no_redirect", lambda _url, timeout: response)
 
     with pytest.raises(runtime.ModelArtifactError, match="exceeds maximum artifact size"):
         runtime._download_model_artifact(
@@ -178,7 +180,7 @@ def test_artifact_downloader_accepts_body_at_configured_limit(
     destination = tmp_path / "cache" / "model.joblib"
     payload = b"0123456789"
     response = StubHTTPResponse(payload, content_length=len(payload))
-    monkeypatch.setattr(runtime.urllib.request, "urlopen", lambda _url, timeout: response)
+    monkeypatch.setattr(runtime, "_open_url_no_redirect", lambda _url, timeout: response)
 
     downloaded = runtime._download_model_artifact(
         "https://models.example/model.joblib",
