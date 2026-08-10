@@ -345,7 +345,7 @@ function App() {
                     className="h-5 w-5 animate-spin text-cyan-200"
                     aria-hidden="true"
                   />
-                  <span className="text-sm text-cyan-100">Analyzing message…</span>
+                  <span className="text-sm text-cyan-100">Analyzing message...</span>
                 </div>
               ) : prediction ? (
                 <div className="mt-5 space-y-5 border-t border-white/10 pt-5">
@@ -614,7 +614,7 @@ function ModelComparisonRow({
     showPrediction && output.probabilities
       ? LABELS.map(
           (label) => `${LABEL_COPY[label]} ${formatPercent(output.probabilities?.[label])}`,
-        ).join(" · ")
+        ).join(" | ")
       : null;
 
   return (
@@ -649,10 +649,10 @@ function ModelComparisonRow({
         </span>
       </td>
       <td className="px-3 py-3 font-medium text-zinc-100">
-        {showPrediction && output.label ? LABEL_COPY[output.label] : "—"}
+        {showPrediction && output.label ? LABEL_COPY[output.label] : "-"}
       </td>
       <td className="px-3 py-3 text-right font-semibold text-zinc-100">
-        {showPrediction ? formatPercent(output.confidence) : "—"}
+        {showPrediction ? formatPercent(output.confidence) : "-"}
       </td>
     </tr>
   );

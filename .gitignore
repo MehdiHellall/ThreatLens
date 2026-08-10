@@ -43,6 +43,14 @@ models/
 artifacts/*
 !artifacts/.gitkeep
 !artifacts/tfidf_logreg.joblib
+!artifacts/distilbert/
+!artifacts/distilbert/config.json
+!artifacts/distilbert/manifest.json
+!artifacts/distilbert/metrics.json
+!artifacts/distilbert/model.safetensors
+!artifacts/distilbert/tokenizer.json
+!artifacts/distilbert/tokenizer_config.json
+!artifacts/distilbert/training_args.bin
 mlruns/
 results/
 outputs/

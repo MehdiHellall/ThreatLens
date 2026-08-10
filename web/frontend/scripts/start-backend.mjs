@@ -21,6 +21,13 @@ if (!env.EMAIL_THREAT_MODEL_PATH && !env.EMAIL_THREAT_MODEL_URL) {
   env.EMAIL_THREAT_MODEL_PATH = path.join(repoRoot, "artifacts", "tfidf_logreg.joblib");
 }
 
+if (
+  !env.EMAIL_THREAT_DISTILBERT_MODEL_PATH &&
+  !env.EMAIL_THREAT_DISTILBERT_MODEL_URL
+) {
+  env.EMAIL_THREAT_DISTILBERT_MODEL_PATH = path.join(repoRoot, "artifacts", "distilbert");
+}
+
 const child = spawn(
   python,
   ["-m", "uvicorn", "web.backend.main:app", "--host", "127.0.0.1", "--port", backendPort],

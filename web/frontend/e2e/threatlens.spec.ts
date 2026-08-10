@@ -128,7 +128,7 @@ test("always presents both model rows", async ({ page }) => {
   await expect(page.getByTestId("model-row-distilbert")).toContainText(/DistilBERT/i);
 });
 
-test("runs the real TF-IDF flow and reports DistilBERT unavailable honestly", async ({
+test("runs the real artifact-backed model flow with DistilBERT available", async ({
   page,
 }) => {
   const textarea = page.getByLabel("Message");
@@ -150,18 +150,18 @@ test("runs the real TF-IDF flow and reports DistilBERT unavailable honestly", as
   });
   await expect(page.getByTestId("prediction-risk")).toHaveText("High risk");
   await expect(page.getByTestId("prediction-confidence")).toHaveText(PERCENTAGE);
-  await expect(page.getByTestId("model-agreement")).toHaveText(/unavailable/i);
+  await expect(page.getByTestId("model-agreement")).toHaveText(/agreed/i);
 
   const tfidfRow = page.getByTestId("model-row-tfidf-logreg");
   await expect(tfidfRow).toContainText("Phishing");
   await expect(tfidfRow.locator("td").last()).toHaveText(PERCENTAGE);
 
   const distilbertRow = page.getByTestId("model-row-distilbert");
-  await expect(distilbertRow).toContainText(/unavailable/i);
-  await expect(distilbertRow).not.toContainText(/\d+(?:\.\d+)?%/);
+  await expect(distilbertRow).toContainText("Phishing");
+  await expect(distilbertRow.locator("td").last()).toHaveText(PERCENTAGE);
 
   await expect(page.getByTestId("prediction-explanation")).toContainText(
-    /TF-IDF|trained model/i,
+    /TF-IDF|DistilBERT/i,
   );
   await expect(page.getByTestId("suggested-action")).toContainText(
     "Do not click links or share credentials",

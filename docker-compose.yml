@@ -22,7 +22,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Fine-tuned transformer weights stay outside the image and repository.
+      # Model artifacts are mounted read-only so the image stays small.
       - ./artifacts:/app/artifacts:ro
     healthcheck:
       test:

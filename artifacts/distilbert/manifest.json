@@ -1,0 +1,108 @@
+{
+  "artifact_fingerprint": "a7f50fd930b9c5765bebc16f8374e4b6503c9409e291fe0d22a94ca057c22c33",
+  "artifact_type": "fine_tuned_sequence_classification",
+  "base_checkpoint": "distilbert/distilbert-base-uncased",
+  "base_revision": "12040accade4e8a0f71eabdb258fecc2e7e948be",
+  "created_at": "2026-08-10T11:30:31.572362+00:00",
+  "dataset": {
+    "filename": "df.csv",
+    "source": "akshatsharma2/the-biggest-spam-ham-phish-email-dataset-300000"
+  },
+  "dependency_versions": {
+    "accelerate": "1.14.0",
+    "datasets": "5.0.1",
+    "numpy": "2.5.1",
+    "pandas": "3.0.5",
+    "safetensors": "0.8.0",
+    "torch": "2.13.0",
+    "transformers": "5.14.1"
+  },
+  "files": {
+    "config.json": {
+      "sha256": "df7e94bc459a84afb7cfda6da7761ccc2316e7e011db243c8689678b9eb7ee9f",
+      "size_bytes": 838
+    },
+    "metrics.json": {
+      "sha256": "009f0491776779641b69fd49ed383932e998f377b9d43aa1863261c991bfe49c",
+      "size_bytes": 1944
+    },
+    "model.safetensors": {
+      "sha256": "0ae92f45b8b105a40ff348a199760bd50872af8a8cda5e1970d0ecddac0e6ee7",
+      "size_bytes": 267835644
+    },
+    "tokenizer.json": {
+      "sha256": "79ea220416a57ca8acdf069d71875d5d2ddadef66021aeb6c120a7c546c04344",
+      "size_bytes": 711494
+    },
+    "tokenizer_config.json": {
+      "sha256": "b568faa40e8980cc2daf9019ca9e631972ad6cb9835068fb1106a3b8b4c83c1b",
+      "size_bytes": 365
+    },
+    "training_args.bin": {
+      "sha256": "fd482c42a68bcfbfdb68f8e21ded70c6054af3a7fec729b20c89b47d2ddd8899",
+      "size_bytes": 5201
+    }
+  },
+  "id2label": {
+    "0": "ham",
+    "1": "phish",
+    "2": "spam"
+  },
+  "label2id": {
+    "ham": 0,
+    "phish": 1,
+    "spam": 2
+  },
+  "max_length": 128,
+  "num_labels": 3,
+  "schema_version": 1,
+  "split_manifest_sha256": "d1737ca5ae8191598326a6d511e9dd321e0344b109bc03a0c45a2f17f6dd793c",
+  "splits": {
+    "test": {
+      "class_counts": {
+        "ham": 4284,
+        "phish": 4284,
+        "spam": 4284
+      },
+      "filename": "test.csv",
+      "rows": 12852,
+      "sha256": "2e538afc44b429d003d86aac128155a9444b20073aeb0edb09fb034c5240a233"
+    },
+    "train": {
+      "class_counts": {
+        "ham": 34270,
+        "phish": 34270,
+        "spam": 34270
+      },
+      "filename": "train.csv",
+      "rows": 102810,
+      "sha256": "5059abffa12795b76c2f2b6abb98d10152ab106beb4f8fca271de4331ca10688"
+    },
+    "validation": {
+      "class_counts": {
+        "ham": 4284,
+        "phish": 4284,
+        "spam": 4284
+      },
+      "filename": "validation.csv",
+      "rows": 12852,
+      "sha256": "de86cf4b20e7267e27d3bfa669b1892eaf312569a384707bb9d28a7d44cf59fc"
+    }
+  },
+  "training_complete": true,
+  "training_config": {
+    "base_checkpoint": "distilbert/distilbert-base-uncased",
+    "batch_size": 16,
+    "epochs": 3,
+    "eval_strategy": "epoch",
+    "fp16": false,
+    "learning_rate": 2e-05,
+    "load_best_model_at_end": true,
+    "max_length": 128,
+    "resume_from_checkpoint": null,
+    "save_strategy": "epoch",
+    "save_total_limit": 1,
+    "seed": 42,
+    "weight_decay": 0.01
+  }
+}

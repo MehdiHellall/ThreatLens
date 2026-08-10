@@ -1,0 +1,78 @@
+{
+  "test": {
+    "accuracy": 0.9842047930283224,
+    "confusion_matrix": [
+      [
+        4198,
+        3,
+        83
+      ],
+      [
+        2,
+        4258,
+        24
+      ],
+      [
+        59,
+        32,
+        4193
+      ]
+    ],
+    "f1_macro": 0.9842049054760166,
+    "per_class": {
+      "ham": {
+        "f1": 0.9827929298841156,
+        "precision": 0.9856773890584645,
+        "recall": 0.9799253034547152,
+        "support": 4284
+      },
+      "phish": {
+        "f1": 0.9928879561618281,
+        "precision": 0.9918471931050548,
+        "recall": 0.9939309056956116,
+        "support": 4284
+      },
+      "spam": {
+        "f1": 0.9769338303821062,
+        "precision": 0.9751162790697674,
+        "recall": 0.9787581699346405,
+        "support": 4284
+      }
+    },
+    "precision_macro": 0.9842136204110955,
+    "recall_macro": 0.9842047930283225,
+    "trainer_metrics": {
+      "test_accuracy": 0.9842047930283224,
+      "test_f1_macro": 0.9842049054760166,
+      "test_loss": 0.06776512414216995,
+      "test_precision_macro": 0.9842136204110955,
+      "test_recall_macro": 0.9842047930283225,
+      "test_runtime": 714.6334,
+      "test_samples_per_second": 17.984,
+      "test_steps_per_second": 1.125
+    }
+  },
+  "training": {
+    "epoch": 3.0,
+    "total_flos": 1.021441209815808e+16,
+    "train_loss": 0.05777624936157743,
+    "train_runtime": 84895.859,
+    "train_samples_per_second": 3.633,
+    "train_steps_per_second": 0.227
+  },
+  "training_config": {
+    "base_checkpoint": "distilbert/distilbert-base-uncased",
+    "batch_size": 16,
+    "epochs": 3,
+    "eval_strategy": "epoch",
+    "fp16": false,
+    "learning_rate": 2e-05,
+    "load_best_model_at_end": true,
+    "max_length": 128,
+    "resume_from_checkpoint": null,
+    "save_strategy": "epoch",
+    "save_total_limit": 1,
+    "seed": 42,
+    "weight_decay": 0.01
+  }
+}

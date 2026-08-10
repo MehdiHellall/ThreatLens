@@ -1,0 +1,55 @@
+version: "3"
+
+tasks:
+  default:
+    desc: List available project tasks
+    cmds:
+      - task --list
+
+  app:
+    desc: Run the full app with Docker Compose
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "if (!(Test-Path '.env')) { Copy-Item '.env.example' '.env' }; docker compose up --build"
+
+  backend:
+    desc: Run the FastAPI backend locally
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; $env:EMAIL_THREAT_MODEL_PATH = 'artifacts\\tfidf_logreg.joblib'; if (!(Test-Path env:EMAIL_THREAT_DISTILBERT_MODEL_PATH)) { $env:EMAIL_THREAT_DISTILBERT_MODEL_PATH = 'artifacts\\distilbert' }; & $py -m uvicorn web.backend.main:app --reload --host 127.0.0.1 --port 8000"
+
+  frontend:
+    desc: Run the Vite frontend locally
+    dir: web/frontend
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:VITE_API_BASE_URL = 'http://127.0.0.1:8000'; pnpm dev"
+
+  test:
+    desc: Run backend tests with a clean temp directory
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; $tmp = Join-Path $env:TEMP 'threatlens-pytest'; & $py -m pytest --basetemp $tmp"
+
+  lint:
+    desc: Run Python and frontend linters
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; & $py -m ruff check .; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Push-Location web\\frontend; pnpm lint; Pop-Location"
+
+  format-check:
+    desc: Check Python formatting
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; & $py -m ruff format --check ."
+
+  build:
+    desc: Build the frontend
+    dir: web/frontend
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:VITE_API_BASE_URL = 'http://127.0.0.1:8000'; pnpm build"
+
+  e2e:
+    desc: Run Playwright E2E tests
+    dir: web/frontend
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:EMAIL_THREAT_MODEL_PATH = (Resolve-Path '..\\..\\artifacts\\tfidf_logreg.joblib').Path; $env:EMAIL_THREAT_DISTILBERT_MODEL_PATH = (Resolve-Path '..\\..\\artifacts\\distilbert').Path; pnpm test:e2e"
+
+  clean:
+    desc: Remove ignored local caches and generated outputs
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths = @('.coverage', '.ruff_cache', '.pytest_cache', '.pytest-tmp', 'src\\email_threat_detector\\__pycache__', 'tests\\__pycache__', 'web\\__pycache__', 'web\\backend\\__pycache__', 'web\\backend\\runtimes\\__pycache__', 'web\\frontend\\dist', 'web\\frontend\\test-results', 'artifacts\\distilbert-smoke-source.csv', 'artifacts\\distilbert-smoke-splits', 'artifacts\\distilbert-smoke-training', 'artifacts\\distilbert-smoke', 'artifacts\\distilbert-training.stderr.log', 'artifacts\\distilbert-training.stdout.log', 'artifacts\\distilbert-training', 'artifacts\\hf-cache', 'artifacts\\transformers', 'data'); foreach ($path in $paths) { if (Test-Path $path) { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Continue } }"

@@ -57,7 +57,7 @@ jobs:
           PY
 
       - name: Install backend dependencies
-        run: python -m pip install -e ".[dev,web]"
+        run: python -m pip install -e ".[dev,web,distilbert-runtime]"
 
       - name: Install frontend dependencies
         working-directory: web/frontend
@@ -81,6 +81,7 @@ jobs:
         working-directory: web/frontend
         env:
           EMAIL_THREAT_MODEL_PATH: ${{ github.workspace }}/artifacts/tfidf_logreg.joblib
+          EMAIL_THREAT_DISTILBERT_MODEL_PATH: ${{ github.workspace }}/artifacts/distilbert
           E2E_FRONTEND_MODE: preview
         run: pnpm test:e2e
 
@@ -104,15 +105,19 @@ jobs:
           last_error: Exception | None = None
           while time.time() < deadline:
               try:
-                  live = get_json("http://127.0.0.1:8000/live")
-                  health = get_json("http://127.0.0.1:8000/health")
-                  if live["status"] == "ok" and health["model_loaded"] is True:
+                  live = get_json("http://127.0.0.1:8000/v1/live")
+                  ready = get_json("http://127.0.0.1:8000/v1/ready")
+                  if (
+                      live["status"] == "ok"
+                      and ready["model_loaded"] is True
+                      and ready["duel_ready"] is True
+                  ):
                       break
               except Exception as exc:
                   last_error = exc
               time.sleep(3)
           else:
-              raise SystemExit(f"Docker backend did not become ready: {last_error}")
+              raise SystemExit(f"Docker backend did not become duel-ready: {last_error}")
 
           payload = json.dumps(
               {"text": "Urgent password reset required verify account."}
@@ -127,6 +132,20 @@ jobs:
               prediction = json.loads(response.read().decode("utf-8"))
           if prediction["label"] not in {"ham", "phish", "spam"}:
               raise SystemExit(f"Unexpected prediction label: {prediction}")
+
+          payload = json.dumps(
+              {"text": "Urgent password reset required verify account."}
+          ).encode("utf-8")
+          request = urllib.request.Request(
+              "http://127.0.0.1:8000/v1/predict",
+              data=payload,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              duel_prediction = json.loads(response.read().decode("utf-8"))
+          if duel_prediction["model_outputs"]["distilbert"]["status"] != "available":
+              raise SystemExit(f"DistilBERT was not available: {duel_prediction}")
 
           with urllib.request.urlopen("http://127.0.0.1:8080/", timeout=10) as response:
               if response.status != 200:
