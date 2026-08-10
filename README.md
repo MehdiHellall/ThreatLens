@@ -50,7 +50,8 @@ Neither backend runtime trains a model. TF-IDF and DistilBERT are loaded from co
 
 ## Setup
 
-Use Python `>=3.10,<3.13`.
+Use Python `>=3.12,<3.13`. The checked-in TF-IDF artifact is serialized for the
+Python 3.12 deployment stack.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev,web,distilbert-runtime,distilbert-training]"

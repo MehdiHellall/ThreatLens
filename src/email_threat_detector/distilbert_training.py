@@ -9,7 +9,7 @@ import math
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from numbers import Integral, Real
 from pathlib import Path
 from types import SimpleNamespace
@@ -766,7 +766,7 @@ def train_and_export(
         "schema_version": 1,
         "artifact_type": "fine_tuned_sequence_classification",
         "training_complete": True,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "base_checkpoint": resolved_config.base_checkpoint,
         "base_revision": resolved_config.base_revision,
         "max_length": resolved_config.max_length,

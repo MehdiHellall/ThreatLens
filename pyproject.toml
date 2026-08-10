@@ -7,7 +7,7 @@ name = "email-threat-detector"
 version = "0.1.0"
 description = "ThreatLens web app for spam and phishing message classification."
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.12,<3.13"
 authors = [
   { name = "Mehdi Hellal" }
 ]
@@ -61,7 +61,7 @@ addopts = "-q --basetemp=.pytest-tmp --cov=web.backend --cov-report=term-missing
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 extend-exclude = ["*.ipynb"]
 
 [tool.ruff.lint]
