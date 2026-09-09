@@ -18,6 +18,7 @@ dist/
 *.egg-info/
 .eggs/
 node_modules/
+.pnpm-store/
 web/frontend/dist/
 web/frontend/playwright-report/
 web/frontend/test-results/
@@ -41,7 +42,6 @@ data/processed/
 data/interim/
 models/
 artifacts/*
-!artifacts/.gitkeep
 !artifacts/tfidf_logreg.joblib
 !artifacts/distilbert/
 !artifacts/distilbert/config.json

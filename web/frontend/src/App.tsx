@@ -6,11 +6,11 @@ import {
   LockKeyhole,
   ScanSearch,
   Send,
-  ShieldCheck,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 import { getMetadata, getReadiness, predictMessage } from "./api";
+import threatlensLogo from "./assets/threatlens-logo.png";
 import type {
   Agreement,
   Metadata,
@@ -193,12 +193,9 @@ function App() {
     };
   }, []);
 
-  const privacyCopy = useMemo(
-    () =>
-      metadata?.privacy ??
-      "Messages are analyzed for the current request only and are not stored.",
-    [metadata?.privacy],
-  );
+  const privacyCopy =
+    metadata?.privacy ??
+    "Messages are analyzed for the current request only and are not stored.";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -229,9 +226,13 @@ function App() {
       <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-5 sm:px-6 lg:px-8">
         <header className="mb-5 flex flex-col gap-4 sm:mb-7 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-md border border-cyan-300/25 bg-zinc-900">
-              <ShieldCheck className="h-5 w-5 text-cyan-200" aria-hidden="true" />
-            </div>
+            <img
+              src={threatlensLogo}
+              alt=""
+              width={48}
+              height={48}
+              className="h-12 w-12 shrink-0 object-contain [image-rendering:pixelated]"
+            />
             <div className="min-w-0">
               <h1 className="text-2xl font-semibold text-white sm:text-3xl">ThreatLens</h1>
               <p className="mt-1 text-sm text-zinc-400">Message threat classifier</p>

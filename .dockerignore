@@ -18,7 +18,6 @@ data/processed/
 data/interim/
 artifacts/*
 !artifacts/
-!artifacts/.gitkeep
 !artifacts/tfidf_logreg.joblib
 models/
 mlruns/

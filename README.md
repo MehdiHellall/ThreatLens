@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="web/frontend/src/assets/threatlens-logo.png" alt="ThreatLens pixel art shield and lens logo" width="128" height="128" />
+</p>
+
 # ThreatLens
 
 ThreatLens is a full-stack NLP project for classifying messages as `ham`, `phish`, or `spam`.
@@ -74,16 +78,18 @@ task app
 
 ## Local Development
 
-Install Python dependencies:
+Create a Python 3.12 virtual environment and install the dependencies:
 
 ```powershell
+py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev,web,distilbert-runtime,distilbert-training]"
 ```
 
-Install frontend dependencies:
+With Node.js 24 and Corepack installed, enable pnpm and install frontend dependencies:
 
 ```powershell
 cd web\frontend
+corepack enable
 pnpm install --frozen-lockfile
 ```
 
