@@ -25,7 +25,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -35,29 +34,13 @@ jobs:
       - name: Enable pnpm
         run: corepack enable
 
-      - name: Verify LFS model artifact
+      - name: Verify checked-out model artifacts
+        run: PYTHONPATH=src python -m email_threat_detector.artifact_validation --root .
+
+      - name: Install locked backend dependencies
         run: |
-          python - <<'PY'
-          from hashlib import sha256
-          from pathlib import Path
-
-          expected = "d9ed306935e26c9bf7b285a861991bb3539be7089ad9d8bf798d781d01d45981"
-          path = Path("artifacts/tfidf_logreg.joblib")
-          if not path.is_file():
-              raise SystemExit(f"Missing model artifact: {path}")
-
-          digest = sha256()
-          with path.open("rb") as file:
-              for chunk in iter(lambda: file.read(1024 * 1024), b""):
-                  digest.update(chunk)
-
-          actual = digest.hexdigest()
-          if actual != expected:
-              raise SystemExit(f"Model artifact SHA-256 mismatch: {actual}")
-          PY
-
-      - name: Install backend dependencies
-        run: python -m pip install -e ".[dev,web,distilbert-runtime]"
+          python -m pip install uv==0.12.21
+          uv sync --frozen --extra dev --extra web --extra distilbert-runtime
 
       - name: Install frontend dependencies
         working-directory: web/frontend
@@ -69,8 +52,6 @@ jobs:
 
       - name: Build frontend
         working-directory: web/frontend
-        env:
-          VITE_API_BASE_URL: http://127.0.0.1:8787
         run: pnpm build
 
       - name: Install Playwright browser
@@ -81,13 +62,11 @@ jobs:
         working-directory: web/frontend
         env:
           EMAIL_THREAT_MODEL_PATH: ${{ github.workspace }}/artifacts/tfidf_logreg.joblib
+          EMAIL_THREAT_MODEL_SHA256: d9ed306935e26c9bf7b285a861991bb3539be7089ad9d8bf798d781d01d45981
           EMAIL_THREAT_DISTILBERT_MODEL_PATH: ${{ github.workspace }}/artifacts/distilbert
-          E2E_FRONTEND_MODE: preview
         run: pnpm test:e2e
 
       - name: Run Docker compose smoke test
-        env:
-          VITE_API_BASE_URL: http://localhost:8000
         run: |
           set -euo pipefail
           trap 'docker compose down' EXIT
@@ -105,8 +84,8 @@ jobs:
           last_error: Exception | None = None
           while time.time() < deadline:
               try:
-                  live = get_json("http://127.0.0.1:8000/v1/live")
-                  ready = get_json("http://127.0.0.1:8000/v1/ready")
+                  live = get_json("http://127.0.0.1:8080/api/v1/live")
+                  ready = get_json("http://127.0.0.1:8080/api/v1/ready")
                   if (
                       live["status"] == "ok"
                       and ready["model_loaded"] is True
@@ -123,7 +102,7 @@ jobs:
               {"text": "Urgent password reset required verify account."}
           ).encode("utf-8")
           request = urllib.request.Request(
-              "http://127.0.0.1:8000/predict",
+              "http://127.0.0.1:8080/api/predict",
               data=payload,
               headers={"Content-Type": "application/json"},
               method="POST",
@@ -137,7 +116,7 @@ jobs:
               {"text": "Urgent password reset required verify account."}
           ).encode("utf-8")
           request = urllib.request.Request(
-              "http://127.0.0.1:8000/v1/predict",
+              "http://127.0.0.1:8080/api/v1/predict",
               data=payload,
               headers={"Content-Type": "application/json"},
               method="POST",

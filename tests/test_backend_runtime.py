@@ -60,7 +60,7 @@ def test_v1_prediction_supports_artifact_without_probabilities(tmp_path: Path) -
 
     assert response.status_code == 200
     assert response.json()["final_label"] == "ham"
-    assert response.json()["final_risk_level"] == "low"
+    assert response.json()["final_risk_level"] == "medium"
     assert response.json()["final_confidence"] is None
     assert response.json()["model_outputs"]["tfidf_logreg"] == {
         "status": "available",
@@ -69,7 +69,7 @@ def test_v1_prediction_supports_artifact_without_probabilities(tmp_path: Path) -
         "probabilities": None,
         "detail": "Prediction completed.",
     }
-    assert "with" not in response.json()["explanation"].split(". No obvious", maxsplit=1)[0]
+    assert "model score" not in response.json()["explanation"]
 
 
 def test_load_model_accepts_enveloped_and_legacy_bare_artifacts(tmp_path: Path) -> None:
@@ -97,6 +97,17 @@ def test_file_checksum_validation_handles_match_none_and_mismatch(tmp_path: Path
 
     with pytest.raises(runtime.ModelArtifactError, match="checksum mismatch"):
         runtime.validate_checksum(artifact, "0" * 64)
+
+
+def test_local_model_is_checksum_verified_before_deserialization(tmp_path: Path) -> None:
+    artifact = tmp_path / "model.joblib"
+    artifact.write_bytes(b"unexpected local bytes")
+
+    state = runtime.load_model_state(AppSettings(model_path=artifact, model_sha256="0" * 64))
+
+    assert state.loaded is False
+    assert state.error is not None
+    assert "checksum mismatch" in state.error
 
 
 @pytest.mark.parametrize(
@@ -306,9 +317,11 @@ def test_runtime_public_helpers_filter_private_metadata_and_unknown_labels(tmp_p
     }
     assert runtime.public_path(None) is None
     assert runtime.normalize_probabilities(None) is None
-    assert runtime.normalize_probabilities({"legit": 0.4, "scam": 0.5, "unknown": 0.1}) == {
+    assert runtime.normalize_probabilities({"legit": 0.4, "scam": 0.5, "unknown": 0.1}) is None
+    assert runtime.normalize_probabilities({"ham": 0.4, "phish": 0.5, "spam": 0.1}) == {
         "ham": 0.4,
         "phish": 0.5,
+        "spam": 0.1,
     }
     assert runtime.normalize_probabilities({"unknown": 1.0}) is None
     assert runtime.normalize_prediction_label(" phishing ") == "phish"
@@ -355,11 +368,12 @@ def test_explanations_cover_confidence_risk_signals_and_actions() -> None:
         "link or contact prompt",
     ]
     explanation = explanation_for("phish", {"phish": 0.91}, text)
-    assert "91% confidence" in explanation
+    assert "91% model score" in explanation
     assert "urgency, credential request, money or prize language" in explanation
     assert "link or contact prompt" not in explanation
+    assert "not an explanation of the model's reasoning" in explanation
 
     assert suggested_action_for("phish", "high").startswith("Do not click")
-    assert suggested_action_for("spam", "medium").startswith("Avoid engaging")
+    assert suggested_action_for("spam", "medium").startswith("Avoid links")
     assert suggested_action_for("ham", "medium").startswith("Review the sender")
     assert suggested_action_for("ham", "low").startswith("Low apparent risk")

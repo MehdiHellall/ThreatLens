@@ -17,8 +17,6 @@ data/raw/
 data/processed/
 data/interim/
 artifacts/*
-!artifacts/
-!artifacts/tfidf_logreg.joblib
 models/
 mlruns/
 results/

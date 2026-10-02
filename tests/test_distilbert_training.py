@@ -515,6 +515,24 @@ def test_finalize_artifact_manifest_adds_revision_and_stable_fingerprint(tmp_pat
     assert json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8")) == manifest
 
 
+def test_exported_json_line_endings_are_canonicalized_before_hashing(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    config = artifact_dir / "config.json"
+    tokenizer = artifact_dir / "nested" / "tokenizer.json"
+    tokenizer.parent.mkdir()
+    config.write_bytes(b'{\r\n  "model": "distilbert"\r\n}\r\n')
+    tokenizer.write_bytes(b'{"normalizer": "lowercase"}\r\n')
+    weights = artifact_dir / "model.safetensors"
+    weights.write_bytes(b"binary\r\nbytes")
+
+    training._normalize_exported_json_line_endings(artifact_dir)
+
+    assert config.read_bytes() == b'{\n  "model": "distilbert"\n}\n'
+    assert tokenizer.read_bytes() == b'{"normalizer": "lowercase"}\n'
+    assert weights.read_bytes() == b"binary\r\nbytes"
+
+
 def test_create_artifact_archive_returns_sha256_labelled_zip(tmp_path: Path) -> None:
     artifact_dir = tmp_path / "artifact"
     artifact_dir.mkdir()

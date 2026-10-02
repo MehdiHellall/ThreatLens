@@ -1,8 +1,9 @@
-const apiBaseUrl = process.env.VITE_API_BASE_URL;
+const apiBaseUrl = process.env.VITE_API_BASE_URL?.trim();
 
-if (!apiBaseUrl) {
-  console.error("VITE_API_BASE_URL must be set before building ThreatLens.");
-  process.exit(1);
+// Production uses Nginx's same-origin /api proxy by default. An explicit URL is
+// still supported for standalone builds and must meet the checks below.
+if (!apiBaseUrl || apiBaseUrl === "/api") {
+  process.exit(0);
 }
 
 function isLoopbackHost(hostname) {
@@ -22,7 +23,7 @@ try {
   }
 } catch {
   console.error(
-    "VITE_API_BASE_URL must be an http(s) origin, and non-loopback production origins must use https.",
+    "VITE_API_BASE_URL must be /api or an http(s) origin; non-loopback origins must use https.",
   );
   process.exit(1);
 }

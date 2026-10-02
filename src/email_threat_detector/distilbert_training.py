@@ -119,9 +119,10 @@ def _sha256(path: Path) -> str:
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+    # Write bytes instead of text so Windows cannot translate LF to CRLF after
+    # the artifact checksums have been calculated.
+    path.write_bytes(
+        (json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
     )
 
 
@@ -599,6 +600,17 @@ def _artifact_files(artifact_dir: Path) -> dict[str, dict[str, Any]]:
     return files
 
 
+def _normalize_exported_json_line_endings(artifact_dir: Path) -> None:
+    """Make exported JSON byte-identical on Windows, macOS, and Linux."""
+    for path in artifact_dir.rglob("*.json"):
+        if not path.is_file() or path.name == "manifest.json":
+            continue
+        contents = path.read_bytes()
+        normalized = contents.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        if normalized != contents:
+            path.write_bytes(normalized)
+
+
 def finalize_artifact_manifest(artifact_dir: str | Path) -> dict[str, Any]:
     """Upgrade a completed artifact manifest with pinned provenance and identity."""
     artifact = Path(artifact_dir)
@@ -760,6 +772,10 @@ def train_and_export(
         "training_config": training_values,
     }
     _write_json(artifact / "metrics.json", metrics)
+
+    # Hugging Face writes some JSON files itself. Normalize all of them before
+    # recording sizes and hashes so a Git checkout with `eol=lf` stays valid.
+    _normalize_exported_json_line_endings(artifact)
 
     files = _artifact_files(artifact)
     manifest: dict[str, Any] = {

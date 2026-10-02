@@ -6,50 +6,83 @@ tasks:
     cmds:
       - task --list
 
-  app:
-    desc: Run the full app with Docker Compose
+  doctor:
+    desc: Check Docker, Compose, Git LFS, resources, and model artifacts
     cmds:
-      - powershell -NoProfile -ExecutionPolicy Bypass -Command "if (!(Test-Path '.env')) { Copy-Item '.env.example' '.env' }; docker compose up --build"
+      - python3 scripts/threatlens.py doctor
+
+  demo:
+    desc: Build, start, and verify the real two-model demo
+    cmds:
+      - python3 scripts/threatlens.py demo
+
+  app:
+    desc: Compatibility alias for the verified demo workflow
+    cmds:
+      - task: demo
+
+  logs:
+    desc: Follow application logs
+    cmds:
+      - python3 scripts/threatlens.py logs
+
+  down:
+    desc: Stop the app without deleting model artifacts or caches
+    cmds:
+      - python3 scripts/threatlens.py down
+
+  share:
+    desc: Share the running demo with a free Tailscale Funnel URL
+    cmds:
+      - python3 scripts/threatlens.py share
+
+  unshare:
+    desc: Disable only the ThreatLens Funnel mapping
+    cmds:
+      - python3 scripts/threatlens.py unshare
 
   backend:
-    desc: Run the FastAPI backend locally
+    desc: Run FastAPI locally with reload
     cmds:
-      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; $env:EMAIL_THREAT_MODEL_PATH = 'artifacts\\tfidf_logreg.joblib'; if (!(Test-Path env:EMAIL_THREAT_DISTILBERT_MODEL_PATH)) { $env:EMAIL_THREAT_DISTILBERT_MODEL_PATH = 'artifacts\\distilbert' }; & $py -m uvicorn web.backend.main:app --reload --host 127.0.0.1 --port 8000"
+      - python3 scripts/threatlens.py backend
 
   frontend:
-    desc: Run the Vite frontend locally
-    dir: web/frontend
+    desc: Run Vite locally with its /api proxy
     cmds:
-      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:VITE_API_BASE_URL = 'http://127.0.0.1:8000'; pnpm dev"
+      - python3 scripts/threatlens.py frontend
 
   test:
-    desc: Run backend tests with a clean temp directory
+    desc: Run backend tests and coverage
     cmds:
-      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; $tmp = Join-Path $env:TEMP 'threatlens-pytest'; & $py -m pytest --basetemp $tmp"
+      - python3 scripts/threatlens.py test
 
   lint:
-    desc: Run Python and frontend linters
+    desc: Run Ruff and ESLint
     cmds:
-      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; & $py -m ruff check .; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Push-Location web\\frontend; pnpm lint; Pop-Location"
+      - python3 scripts/threatlens.py lint
 
   format-check:
     desc: Check Python formatting
     cmds:
-      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$py = if (Test-Path '.\\.venv\\Scripts\\python.exe') { '.\\.venv\\Scripts\\python.exe' } else { 'python' }; & $py -m ruff format --check ."
+      - python3 scripts/threatlens.py format-check
 
   build:
     desc: Build the frontend
-    dir: web/frontend
     cmds:
-      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:VITE_API_BASE_URL = 'http://127.0.0.1:8000'; pnpm build"
+      - python3 scripts/threatlens.py build
 
   e2e:
-    desc: Run Playwright E2E tests
-    dir: web/frontend
+    desc: Run Playwright end-to-end tests
     cmds:
-      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:EMAIL_THREAT_MODEL_PATH = (Resolve-Path '..\\..\\artifacts\\tfidf_logreg.joblib').Path; $env:EMAIL_THREAT_DISTILBERT_MODEL_PATH = (Resolve-Path '..\\..\\artifacts\\distilbert').Path; pnpm test:e2e"
+      - python3 scripts/threatlens.py e2e
+
+  clean-dry-run:
+    desc: Preview safe cleanup without deleting anything
+    cmds:
+      - python3 scripts/threatlens.py clean
 
   clean:
-    desc: Remove ignored local caches and generated outputs
+    desc: Remove only allowlisted build and test outputs
+    prompt: This removes disposable caches and test/build outputs. Continue?
     cmds:
-      - powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths = @('.coverage', '.ruff_cache', '.pytest_cache', '.pytest-tmp', 'src\\email_threat_detector\\__pycache__', 'tests\\__pycache__', 'web\\__pycache__', 'web\\backend\\__pycache__', 'web\\backend\\runtimes\\__pycache__', 'web\\frontend\\dist', 'web\\frontend\\test-results', 'artifacts\\distilbert-smoke-source.csv', 'artifacts\\distilbert-smoke-splits', 'artifacts\\distilbert-smoke-training', 'artifacts\\distilbert-smoke', 'artifacts\\distilbert-training.stderr.log', 'artifacts\\distilbert-training.stdout.log', 'artifacts\\distilbert-training', 'artifacts\\hf-cache', 'artifacts\\transformers', 'data'); foreach ($path in $paths) { if (Test-Path $path) { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Continue } }"
+      - python3 scripts/threatlens.py clean --execute

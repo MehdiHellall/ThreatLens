@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import re
 import threading
 import time
@@ -19,7 +20,7 @@ from typing import Any, cast
 
 import joblib
 
-from web.backend.labels import normalize_label
+from web.backend.labels import LABEL_NAMES, normalize_label
 from web.backend.schemas import ThreatLabel
 from web.backend.settings import (
     DEFAULT_MAX_ARTIFACT_BYTES,
@@ -92,6 +93,12 @@ class ModelArtifactError(RuntimeError):
 ArtifactDownloader = Callable[[str, Path], Path]
 MonotonicClock = Callable[[], float]
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+TERMINAL_REMOTE_ERROR_MARKERS = (
+    "checksum mismatch",
+    "must be a 64-character",
+    "must use https",
+    "is required for remote",
+)
 
 
 def resolve_local_path(path: Path) -> Path:
@@ -227,6 +234,11 @@ def resolve_model_artifact(
         model_path = resolve_local_path(settings.model_path)
         if not model_path.is_file():
             return model_path, f"Configured model artifact does not exist: {model_path.name}"
+        if settings.model_sha256 is not None:
+            try:
+                validate_checksum(model_path, settings.model_sha256)
+            except ModelArtifactError as exc:
+                return model_path, str(exc)
         return model_path, None
     if settings.model_url is None:
         return None, f"{MODEL_PATH_ENV} or {MODEL_URL_ENV} must be set."
@@ -290,6 +302,7 @@ class ModelService:
         self._state: ModelState | None = None
         self._last_remote_attempt_at: float | None = None
         self._warmup_thread: threading.Thread | None = None
+        self._warmup_start_lock = threading.Lock()
 
     def get_state(self) -> ModelState:
         """Return the current model state, loading the artifact on first use."""
@@ -316,20 +329,36 @@ class ModelService:
             or self._state.loaded
             or self._settings.model_url is None
             or self._last_remote_attempt_at is None
+            or any(
+                marker in (self._state.error or "").casefold()
+                for marker in TERMINAL_REMOTE_ERROR_MARKERS
+            )
         ):
             return False
         return now - self._last_remote_attempt_at >= self._settings.model_retry_seconds
 
+    def peek_state(self) -> ModelState | None:
+        """Return the current state without starting or waiting for a model load."""
+        state = self._state
+        if state is not None and self._remote_retry_is_due(self._monotonic()):
+            self.start_background_warmup()
+        return state
+
+    @property
+    def loading(self) -> bool:
+        return self._warmup_thread is not None and self._warmup_thread.is_alive()
+
     def start_background_warmup(self) -> None:
         """Start a non-blocking model load for hosted runtimes."""
-        if self._warmup_thread is not None:
-            return
-        self._warmup_thread = threading.Thread(
-            target=self.get_state,
-            name="threatlens-model-warmup",
-            daemon=True,
-        )
-        self._warmup_thread.start()
+        with self._warmup_start_lock:
+            if self._warmup_thread is not None and self._warmup_thread.is_alive():
+                return
+            self._warmup_thread = threading.Thread(
+                target=self.get_state,
+                name="threatlens-model-warmup",
+                daemon=True,
+            )
+            self._warmup_thread.start()
 
 
 def load_metrics(path: Path) -> dict[str, object] | None:
@@ -363,16 +392,26 @@ def public_artifact_metadata(state: ModelState) -> dict[str, str | None]:
 def normalize_probabilities(
     probabilities: dict[str, float] | None,
 ) -> dict[str, float] | None:
+    """Return a complete, finite canonical probability distribution or ``None``."""
     if probabilities is None:
         return None
     normalized: dict[str, float] = {}
     for raw_label, score in probabilities.items():
         try:
             label = normalize_label(raw_label)
-        except ValueError:
-            continue
-        normalized[label] = float(score)
-    return normalized or None
+            numeric_score = float(score)
+        except (TypeError, ValueError):
+            return None
+        if label in normalized or not math.isfinite(numeric_score):
+            return None
+        if numeric_score < 0.0 or numeric_score > 1.0:
+            return None
+        normalized[label] = numeric_score
+    if set(normalized) != set(LABEL_NAMES):
+        return None
+    if not math.isclose(sum(normalized.values()), 1.0, rel_tol=1e-5, abs_tol=1e-6):
+        return None
+    return normalized
 
 
 def normalize_prediction_label(label: str) -> ThreatLabel:

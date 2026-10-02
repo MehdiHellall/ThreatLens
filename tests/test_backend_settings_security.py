@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -165,11 +166,33 @@ def test_disabled_rate_limiter_allows_every_request() -> None:
     assert all(limiter.allow("analyst", now=float(second)) for second in range(100))
 
 
+def test_rate_limiter_bounds_client_tracking_with_lru_eviction() -> None:
+    limiter = RequestRateLimiter(limit_per_minute=2, max_clients=2)
+
+    assert limiter.allow("analyst-a", now=100.0) is True
+    assert limiter.allow("analyst-b", now=101.0) is True
+    assert limiter.allow("analyst-c", now=102.0) is True
+
+    assert list(limiter._requests_by_client) == ["analyst-b", "analyst-c"]
+
+
 def test_request_helpers_handle_unknown_clients_and_malformed_lengths() -> None:
     assert security._client_id(_request(content_length="10", client=None)) == "unknown"
     assert security._content_length(_request(content_length=None)) is None
     assert security._content_length(_request(content_length="invalid")) == -1
     assert security._content_length(_request(content_length="12")) == 12
+
+
+def test_request_ids_accept_safe_values_and_replace_untrusted_values() -> None:
+    safe_request = _request(content_length="12")
+    safe_request.scope["headers"].append((b"x-request-id", b"demo-request_42"))
+    unsafe_request = _request(content_length="12")
+    unsafe_request.scope["headers"].append((b"x-request-id", b"bad value\nsecret"))
+
+    assert security._request_id(safe_request) == "demo-request_42"
+    generated = security._request_id(unsafe_request)
+    assert len(generated) == 32
+    assert generated != "bad value\nsecret"
 
 
 @pytest.mark.parametrize(
@@ -207,3 +230,24 @@ def test_prediction_guard_allows_valid_request_then_rate_limits_client() -> None
     assert response is not None
     assert response.status_code == 429
     assert "Too many prediction requests" in json.loads(response.body)["detail"]
+
+
+def test_prediction_admission_is_bounded_and_recovers_after_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    middleware = security.PredictionSecurityMiddleware(
+        lambda _scope, _receive, _send: None,
+        settings=AppSettings(),
+    )
+    monkeypatch.setattr(security, "PREDICTION_QUEUE_TIMEOUT_SECONDS", 0.01)
+
+    async def exercise() -> None:
+        assert await middleware._admit_prediction() is True
+        assert await middleware._admit_prediction() is False
+        assert middleware._pending_predictions == 1
+        await middleware._release_prediction()
+        assert await middleware._admit_prediction() is True
+        await middleware._release_prediction()
+
+    asyncio.run(exercise())
+    assert middleware._pending_predictions == 0

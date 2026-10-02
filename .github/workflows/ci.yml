@@ -30,13 +30,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
 
-      - name: Install package and development tools
-        run: python -m pip install -e ".[dev]"
+      - name: Install locked development environment
+        run: |
+          python -m pip install uv==0.12.21
+          uv sync --frozen --extra dev
 
       - name: Run Ruff
-        run: python -m ruff check .
+        run: .venv/bin/python -m ruff check .
+
+      - name: Check formatting
+        run: .venv/bin/python -m ruff format --check .
 
       - name: Run pytest
-        run: python -m pytest
+        run: .venv/bin/python -m pytest

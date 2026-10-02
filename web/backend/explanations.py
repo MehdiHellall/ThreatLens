@@ -43,24 +43,26 @@ def risk_level_for(label: str, probabilities: dict[str, float] | None) -> RiskLe
 
 
 def matched_signals(text: str) -> list[str]:
-    """Return deterministic text signals used only to explain the model output."""
+    """Return deterministic heuristics that are separate from model attribution."""
     return [name for name, pattern in TRANSPARENT_SIGNALS.items() if pattern.search(text)]
 
 
 def explanation_for(label: str, probabilities: dict[str, float] | None, text: str) -> str:
-    """Describe the artifact-backed result without claiming model internals we do not expose."""
-    confidence = confidence_for(label, probabilities)
-    confidence_text = f" with {confidence:.0%} confidence" if confidence is not None else ""
+    """Describe the result without treating a raw model probability as calibrated certainty."""
+    score = confidence_for(label, probabilities)
+    score_text = f" with a {score:.0%} model score" if score is not None else ""
     signals = matched_signals(text)
     if signals:
         signal_text = ", ".join(signals[:3])
         return (
-            f"The trained model classified this message as {label}{confidence_text}. "
-            f"Transparent text signals observed: {signal_text}."
+            f"The model classified this message as {label}{score_text}. "
+            f"A separate keyword check observed: {signal_text}; these signals are not an "
+            "explanation of the model's reasoning."
         )
     return (
-        f"The trained model classified this message as {label}{confidence_text}. "
-        "No obvious keyword signal dominated the explanation, so treat the score as model-driven."
+        f"The model classified this message as {label}{score_text}. "
+        "A separate keyword check found no listed signal; the model's internal reasoning is not "
+        "exposed."
     )
 
 
@@ -72,7 +74,10 @@ def suggested_action_for(label: str, risk_level: RiskLevel) -> str:
             "channel and report it to your security team."
         )
     if label == "spam":
-        return "Avoid engaging with the sender. Mark it as spam or delete it if it is unsolicited."
+        return (
+            "Avoid links, attachments, replies, and requests for credentials. Mark it as spam "
+            "or delete it if it is unsolicited."
+        )
     if risk_level == "medium":
         return "Review the sender and context before acting; the model confidence is not decisive."
     return "Low apparent risk. Continue normal handling, while still checking sender context."

@@ -1,5 +1,5 @@
 {
-  "artifact_fingerprint": "a7f50fd930b9c5765bebc16f8374e4b6503c9409e291fe0d22a94ca057c22c33",
+  "artifact_fingerprint": "a7ca7f5bb0fb4b9b7dab269ac0e5034c9c03bea960068810f8bb982c1700fd27",
   "artifact_type": "fine_tuned_sequence_classification",
   "base_checkpoint": "distilbert/distilbert-base-uncased",
   "base_revision": "12040accade4e8a0f71eabdb258fecc2e7e948be",
@@ -19,12 +19,12 @@
   },
   "files": {
     "config.json": {
-      "sha256": "df7e94bc459a84afb7cfda6da7761ccc2316e7e011db243c8689678b9eb7ee9f",
-      "size_bytes": 838
+      "sha256": "ba9ed8e15392a35aaa9a972142717a2eccd96b4d1992c50ac1e6190691e9e1ca",
+      "size_bytes": 800
     },
     "metrics.json": {
-      "sha256": "009f0491776779641b69fd49ed383932e998f377b9d43aa1863261c991bfe49c",
-      "size_bytes": 1944
+      "sha256": "d4c3942f18aecc548e55e6e49dbeef9d09ddb7659cf6a6de7d32bc3c900478dd",
+      "size_bytes": 1866
     },
     "model.safetensors": {
       "sha256": "0ae92f45b8b105a40ff348a199760bd50872af8a8cda5e1970d0ecddac0e6ee7",
@@ -35,8 +35,8 @@
       "size_bytes": 711494
     },
     "tokenizer_config.json": {
-      "sha256": "b568faa40e8980cc2daf9019ca9e631972ad6cb9835068fb1106a3b8b4c83c1b",
-      "size_bytes": 365
+      "sha256": "8b54ad532ba293be69643d90fbdaa7f440e593d7f1798f83d750adaa9a1cd934",
+      "size_bytes": 350
     },
     "training_args.bin": {
       "sha256": "fd482c42a68bcfbfdb68f8e21ded70c6054af3a7fec729b20c89b47d2ddd8899",

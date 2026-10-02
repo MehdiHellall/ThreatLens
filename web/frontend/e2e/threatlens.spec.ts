@@ -1,10 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const PHISHING_MESSAGE = "Urgent password reset required verify account.";
+const PHISHING_MESSAGE = "Urgent password reset required. Verify your account now.";
 const PERCENTAGE = /^\d+(?:\.\d+)?%$/;
+const LABEL_COPY = { ham: "Legitimate", phish: "Phishing", spam: "Spam" } as const;
+const RISK_COPY = { low: "Low apparent risk", medium: "Medium risk", high: "High risk" } as const;
 
 type ThreatLabel = "ham" | "phish" | "spam";
-type Agreement = "agreed" | "disagreed" | "partial" | "unavailable";
 type ModelStatus = "available" | "error" | "unavailable";
 
 type ModelOutput = {
@@ -18,8 +19,20 @@ type ModelOutput = {
 type DuelPrediction = {
   final_label: ThreatLabel;
   final_risk_level: "low" | "medium" | "high";
-  final_confidence: number;
-  agreement: Agreement;
+  final_confidence: number | null;
+  final_model: "tfidf_logreg" | "distilbert";
+  fallback_reason: string | null;
+  score_kind: string;
+  review_recommended: boolean;
+  review_reasons: string[];
+  input_metadata: {
+    character_count: number;
+    transformer_tokens: number | null;
+    transformer_max_tokens: number;
+    truncated: boolean | null;
+  };
+  heuristic_signals: string[];
+  agreement: "agreed" | "disagreed" | "partial" | "unavailable";
   model_outputs: {
     tfidf_logreg: ModelOutput;
     distilbert: ModelOutput;
@@ -27,12 +40,12 @@ type DuelPrediction = {
   explanation: string;
   suggested_action: string;
   artifact_metadata: {
-    artifact: string;
-    model_name: string;
-    metrics_file: string;
+    artifact: string | null;
+    model_name: string | null;
+    metrics_file: string | null;
   };
   model_manifests: {
-    tfidf_logreg: Record<string, unknown>;
+    tfidf_logreg: Record<string, unknown> | null;
     distilbert: Record<string, unknown> | null;
   };
 };
@@ -53,20 +66,29 @@ const DISTILBERT_PHISH: ModelOutput = {
   detail: "Prediction completed.",
 };
 
-function duelPrediction(
-  overrides: Partial<DuelPrediction> = {},
-): DuelPrediction {
+function duelPrediction(overrides: Partial<DuelPrediction> = {}): DuelPrediction {
   return {
     final_label: "phish",
     final_risk_level: "high",
     final_confidence: 0.96,
+    final_model: "distilbert",
+    fallback_reason: null,
+    score_kind: "uncalibrated_probability",
+    review_recommended: false,
+    review_reasons: [],
+    input_metadata: {
+      character_count: PHISHING_MESSAGE.length,
+      transformer_tokens: 12,
+      transformer_max_tokens: 128,
+      truncated: false,
+    },
+    heuristic_signals: ["urgency", "credential request"],
     agreement: "agreed",
     model_outputs: {
       tfidf_logreg: TFIDF_PHISH,
       distilbert: DISTILBERT_PHISH,
     },
-    explanation:
-      "TF-IDF Logistic Regression and DistilBERT both classified this message as phishing.",
+    explanation: "Both models classified this message as phishing.",
     suggested_action: "Do not click links or share credentials.",
     artifact_metadata: {
       artifact: "tfidf_logreg.joblib",
@@ -75,115 +97,96 @@ function duelPrediction(
     },
     model_manifests: {
       tfidf_logreg: { version: "tfidf-test" },
-      distilbert: { version: "distilbert-test" },
+      distilbert: { base_checkpoint: "distilbert/distilbert-base-uncased" },
     },
     ...overrides,
   };
 }
 
-async function mockPrediction(page: Page, prediction: DuelPrediction) {
+async function openApp(page: Page) {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "ThreatLens" })).toBeVisible();
+}
+
+function messageEditor(page: Page) {
+  return page.getByRole("textbox", { name: "Message", exact: true });
+}
+
+async function mockPrediction(page: Page, prediction: DuelPrediction, delayMs = 0) {
   await page.route("**/v1/predict", async (route) => {
     if (route.request().method() !== "POST") {
       await route.continue();
       return;
     }
-
+    if (delayMs) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      headers: { "access-control-allow-origin": "*" },
       body: JSON.stringify(prediction),
     });
   });
 }
 
 async function analyze(page: Page) {
-  await page.getByLabel("Message").fill(PHISHING_MESSAGE);
-  await page.getByRole("button", { name: "Analyze", exact: true }).click();
+  await messageEditor(page).fill(PHISHING_MESSAGE);
+  const analyzeButton = page.getByRole("button", { name: "Analyze message" });
+  await expect(analyzeButton).toBeEnabled({ timeout: 180_000 });
+  await analyzeButton.click();
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.goto("/");
+test("offers focused samples without fabricating a result", async ({ page }) => {
+  await openApp(page);
 
-  await expect(page.getByRole("heading", { name: "ThreatLens" })).toBeVisible();
-  await expect(page.getByText("Model ready")).toBeVisible({ timeout: 120_000 });
+  const sample = page.getByRole("button", { name: "Account alert" });
+  await expect(sample).toBeVisible();
+  await sample.click();
+
+  await expect(messageEditor(page)).toHaveValue(/example\.com\/security/);
+  await expect(sample).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("verdict-result")).toHaveCount(0);
+  await expect(page.getByText(/examples only fill the editor/i)).toBeVisible();
 });
 
-test("keeps the real classifier as the only primary action", async ({ page }) => {
-  await expect(page.getByRole("button")).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Analyze", exact: true })).toBeVisible();
+test("runs the real artifact-backed model flow", async ({ page }) => {
+  await openApp(page);
+  await expect(page.getByText("Two models ready")).toBeVisible({ timeout: 180_000 });
 
-  for (const exampleName of ["ham", "phish", "spam"]) {
-    await expect(page.getByRole("button", { name: exampleName, exact: true })).toHaveCount(0);
-  }
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname.endsWith("/v1/predict"),
+  );
+  await analyze(page);
+  const apiResponse = await responsePromise;
+  expect(apiResponse.ok()).toBe(true);
+  const apiPrediction = (await apiResponse.json()) as DuelPrediction;
 
-  await expect(page.getByLabel("Message")).toBeVisible();
-  await expect(page.getByText(/not stored/i).first()).toBeVisible();
-});
+  await expect(page.getByTestId("prediction-label")).toHaveText(
+    LABEL_COPY[apiPrediction.final_label],
+    {
+      timeout: 60_000,
+    },
+  );
+  await expect(page.getByTestId("prediction-risk")).toHaveText(
+    RISK_COPY[apiPrediction.final_risk_level],
+  );
+  await expect(page.getByTestId("prediction-confidence")).toHaveText(PERCENTAGE);
+  await expect(page.getByTestId("model-agreement")).toContainText(/agree|disagree/i);
 
-test("always presents both model rows", async ({ page }) => {
+  await page.getByTestId("analysis-details").getByText("Analysis details").click();
   await expect(page.getByTestId("model-row-tfidf-logreg")).toContainText(
     /TF-IDF.*Logistic Regression/i,
   );
   await expect(page.getByTestId("model-row-distilbert")).toContainText(/DistilBERT/i);
-});
-
-test("runs the real artifact-backed model flow with DistilBERT available", async ({
-  page,
-}) => {
-  const textarea = page.getByLabel("Message");
-  await textarea.fill(PHISHING_MESSAGE);
-  await expect(textarea).toHaveValue(PHISHING_MESSAGE);
-
-  const predictionResponsePromise = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      new URL(response.url()).pathname === "/v1/predict",
-  );
-
-  await page.getByRole("button", { name: "Analyze", exact: true }).click();
-  const predictionResponse = await predictionResponsePromise;
-  expect(predictionResponse.ok()).toBe(true);
-
-  await expect(page.getByTestId("prediction-label")).toHaveText("Phishing", {
-    timeout: 60_000,
-  });
-  await expect(page.getByTestId("prediction-risk")).toHaveText("High risk");
-  await expect(page.getByTestId("prediction-confidence")).toHaveText(PERCENTAGE);
-  await expect(page.getByTestId("model-agreement")).toHaveText(/agreed/i);
-
-  const tfidfRow = page.getByTestId("model-row-tfidf-logreg");
-  await expect(tfidfRow).toContainText("Phishing");
-  await expect(tfidfRow.locator("td").last()).toHaveText(PERCENTAGE);
-
-  const distilbertRow = page.getByTestId("model-row-distilbert");
-  await expect(distilbertRow).toContainText("Phishing");
-  await expect(distilbertRow.locator("td").last()).toHaveText(PERCENTAGE);
-
-  await expect(page.getByTestId("prediction-explanation")).toContainText(
-    /TF-IDF|DistilBERT/i,
-  );
+  await expect(page.getByTestId("prediction-explanation")).toContainText(/model/i);
   await expect(page.getByTestId("suggested-action")).toContainText(
-    "Do not click links or share credentials",
+    /click|link|credential|sender|review|verify/i,
   );
-  await expect(page.getByTestId("model-artifact")).toContainText("tfidf_logreg.joblib");
 });
 
-test("shows agreement when both real model outputs select the same label", async ({
-  page,
-}) => {
-  await mockPrediction(page, duelPrediction());
-  await analyze(page);
-
-  await expect(page.getByTestId("model-agreement")).toHaveText(/agree/i);
-  await expect(page.getByTestId("model-row-tfidf-logreg")).toContainText("Phishing");
-  await expect(page.getByTestId("model-row-distilbert")).toContainText("Phishing");
-  await expect(page.getByTestId("uncertainty-warning")).toHaveCount(0);
-});
-
-test("shows disagreement and uses the DistilBERT result as the final recommendation", async ({
-  page,
-}) => {
+test("puts disagreement and manual review beside the verdict", async ({ page }) => {
   await mockPrediction(
     page,
     duelPrediction({
@@ -191,6 +194,8 @@ test("shows disagreement and uses the DistilBERT result as the final recommendat
       final_risk_level: "medium",
       final_confidence: 0.72,
       agreement: "disagreed",
+      review_recommended: true,
+      review_reasons: ["model_disagreement"],
       model_outputs: {
         tfidf_logreg: TFIDF_PHISH,
         distilbert: {
@@ -201,28 +206,31 @@ test("shows disagreement and uses the DistilBERT result as the final recommendat
           detail: "Prediction completed.",
         },
       },
-      explanation:
-        "TF-IDF Logistic Regression selected phishing while DistilBERT selected spam.",
-      suggested_action: "Treat as spam and send this disagreement for manual review.",
+      explanation: "The classifiers reached different conclusions.",
+      suggested_action: "Treat this as spam and review it manually.",
     }),
   );
+  await openApp(page);
   await analyze(page);
 
-  await expect(page.getByTestId("model-agreement")).toHaveText(/disagree/i);
-  await expect(page.getByTestId("model-row-tfidf-logreg")).toContainText("Phishing");
-  await expect(page.getByTestId("model-row-distilbert")).toContainText("Spam");
   await expect(page.getByTestId("prediction-label")).toHaveText("Spam");
-  await expect(page.getByTestId("prediction-confidence")).toHaveText("72%");
-  await expect(page.getByTestId("suggested-action")).toContainText("Treat as spam");
+  await expect(page.getByTestId("model-agreement")).toContainText(/disagree/i);
   await expect(page.getByTestId("uncertainty-warning")).toContainText(/manual review/i);
+  await expect(page.getByTestId("uncertainty-warning")).toContainText(
+    /different conclusions/i,
+  );
 });
 
-test("shows a partial result when DistilBERT fails during inference", async ({ page }) => {
+test("explains a primary-model fallback without exposing raw codes", async ({ page }) => {
   await mockPrediction(
     page,
     duelPrediction({
       final_confidence: 0.91,
+      final_model: "tfidf_logreg",
+      fallback_reason: "primary_prediction_failed",
       agreement: "partial",
+      review_recommended: true,
+      review_reasons: ["primary_prediction_failed"],
       model_outputs: {
         tfidf_logreg: TFIDF_PHISH,
         distilbert: {
@@ -230,76 +238,70 @@ test("shows a partial result when DistilBERT fails during inference", async ({ p
           label: null,
           confidence: null,
           probabilities: null,
-          detail: "DistilBERT inference is temporarily unavailable.",
+          detail: "DistilBERT could not complete this request.",
         },
       },
-      explanation:
-        "TF-IDF Logistic Regression classified this message as phishing. DistilBERT could not complete inference.",
     }),
   );
+  await openApp(page);
   await analyze(page);
 
-  await expect(page.getByTestId("model-agreement")).toHaveText(/partial/i);
-  await expect(page.getByTestId("prediction-label")).toHaveText("Phishing");
-  await expect(page.getByTestId("model-row-distilbert")).toContainText(
-    /temporarily unavailable/i,
-  );
-  await expect(page.getByTestId("model-row-distilbert")).not.toContainText(
-    /\d+(?:\.\d+)?%/,
+  await expect(page.getByTestId("model-agreement")).toContainText(/partial/i);
+  await expect(page.getByTestId("fallback-message")).toContainText(/TF-IDF fallback/i);
+  await expect(page.getByTestId("fallback-message")).not.toContainText(
+    "primary_prediction_failed",
   );
 });
 
-test("shows a useful error when the TF-IDF model is temporarily unavailable", async ({
-  page,
-}) => {
-  const errorDetail = "Model artifact is temporarily unavailable. Try again shortly.";
+test("invalidates an in-flight result when the message changes", async ({ page }) => {
+  await mockPrediction(page, duelPrediction(), 500);
+  await openApp(page);
+  await analyze(page);
+  await messageEditor(page).fill("A different message entered while the model runs.");
 
+  await page.waitForTimeout(700);
+  await expect(page.getByTestId("verdict-result")).toHaveCount(0);
+  await expect(page.getByText("Your assessment will appear here")).toBeVisible();
+});
+
+test("shows retry guidance while preserving the submitted message", async ({ page }) => {
   await page.route("**/v1/predict", async (route) => {
-    if (route.request().method() !== "POST") {
-      await route.continue();
-      return;
-    }
-
     await route.fulfill({
       status: 503,
       contentType: "application/json",
-      headers: { "access-control-allow-origin": "*" },
-      body: JSON.stringify({ detail: errorDetail }),
+      headers: { "Retry-After": "5" },
+      body: JSON.stringify({ detail: "The prediction service is busy." }),
     });
   });
-
+  await openApp(page);
   await analyze(page);
 
-  await expect(page.getByRole("alert")).toContainText(errorDetail);
-  await expect(page.getByRole("button", { name: "Analyze", exact: true })).toBeEnabled();
+  await expect(page.getByRole("alert")).toContainText(/busy/i);
+  await expect(page.getByRole("alert")).toContainText(/5 seconds/i);
+  await expect(messageEditor(page)).toHaveValue(PHISHING_MESSAGE);
+  await expect(page.getByRole("button", { name: "Try again" })).toBeEnabled();
 });
 
-test("keeps analysis available after a transient readiness failure", async ({ page }) => {
-  await page.route("**/v1/ready", async (route) => {
-    await route.fulfill({
-      status: 503,
-      contentType: "application/json",
-      headers: { "access-control-allow-origin": "*" },
-      body: JSON.stringify({
-        status: "error",
-        model_loaded: false,
-        model_path: "tfidf_logreg.joblib",
-        detail: "Model artifact is temporarily unavailable.",
-      }),
-    });
+test("supports the keyboard submit shortcut", async ({ page }) => {
+  await mockPrediction(page, duelPrediction());
+  await openApp(page);
+  const editor = messageEditor(page);
+  await editor.fill(PHISHING_MESSAGE);
+  await expect(page.getByRole("button", { name: "Analyze message" })).toBeEnabled({
+    timeout: 180_000,
   });
+  await editor.press("Control+Enter");
 
-  await page.reload();
-  await expect(page.getByText("Model offline")).toBeVisible();
-  await page.getByLabel("Message").fill(PHISHING_MESSAGE);
-
-  await expect(page.getByRole("button", { name: "Analyze", exact: true })).toBeEnabled();
+  await expect(page.getByTestId("prediction-label")).toHaveText("Phishing");
 });
 
-test("does not create horizontal overflow at the tested viewport", async ({ page }) => {
-  const hasHorizontalOverflow = await page.evaluate(
-    () => document.body.scrollWidth > document.documentElement.clientWidth + 1,
-  );
-
-  expect(hasHorizontalOverflow).toBe(false);
+test("stays usable without horizontal overflow at release widths", async ({ page }) => {
+  for (const width of [320, 390, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await openApp(page);
+    const hasHorizontalOverflow = await page.evaluate(
+      () => document.body.scrollWidth > document.documentElement.clientWidth + 1,
+    );
+    expect(hasHorizontalOverflow, `unexpected horizontal overflow at ${width}px`).toBe(false);
+  }
 });

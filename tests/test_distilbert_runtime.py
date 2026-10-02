@@ -140,6 +140,37 @@ def test_artifact_manifest_and_all_declared_checksums_are_validated(tmp_path: Pa
         runtime.validate_artifact_directory(artifact, expected_max_length=128)
 
 
+def test_public_evaluation_metrics_only_exposes_bounded_aggregates(tmp_path: Path) -> None:
+    artifact = tmp_path / "distilbert"
+    _write_exported_artifact(artifact)
+    metrics_path = artifact / "metrics.json"
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    metrics["test"].update(
+        {
+            "f1_macro": 0.98,
+            "precision_macro": 0.97,
+            "recall_macro": 0.99,
+            "test_loss": 0.1,
+            "invalid": float("nan"),
+        }
+    )
+    metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+    state = runtime.DistilBertState(
+        runtime=object(),
+        path=artifact,
+        manifest={"training_complete": True},
+    )
+
+    assert runtime.public_evaluation_metrics(state) == {
+        "test": {
+            "accuracy": 1.0,
+            "f1_macro": 0.98,
+            "precision_macro": 0.97,
+            "recall_macro": 0.99,
+        }
+    }
+
+
 def test_pickle_model_weights_are_rejected_in_favor_of_safetensors(tmp_path: Path) -> None:
     artifact = tmp_path / "distilbert"
     manifest = _write_exported_artifact(artifact)
@@ -384,6 +415,10 @@ def test_runtime_uses_local_hf_files_eval_no_grad_exact_tokenization_and_softmax
     calls: dict[str, object] = {}
 
     class FakeTokenizer:
+        def encode(self, text: str, **kwargs: object) -> list[int]:
+            calls["token_count"] = (text, kwargs)
+            return [101, 2023, 2003, 1037, 3231, 102]
+
         def __call__(self, text: str, **kwargs: object) -> dict[str, object]:
             calls["tokenize"] = (text, kwargs)
             return {"input_ids": "encoded", "attention_mask": "mask"}
@@ -461,11 +496,18 @@ def test_runtime_uses_local_hf_files_eval_no_grad_exact_tokenization_and_softmax
     assert calls["no_grad_exited"] is True
     assert calls["softmax"] == ("raw-logits", -1)
     assert calls["model_call"] == {"input_ids": "encoded", "attention_mask": "mask"}
+    assert calls["token_count"] == (
+        "keep this private",
+        {"add_special_tokens": True, "truncation": False},
+    )
     assert result.label == "phish"
     assert result.probabilities == pytest.approx(
         {"ham": 0.0900305732, "phish": 0.6652409558, "spam": 0.2447284711}
     )
     assert math.isclose(sum(result.probabilities.values()), 1.0)
+    assert result.token_count == 6
+    assert result.max_tokens == 128
+    assert result.truncated is False
     assert "keep this private" not in repr(vars(classifier))
 
 
@@ -966,3 +1008,45 @@ def test_distilbert_service_loads_lazily_and_only_once(
     assert service.get_state() is expected
     assert service.get_state() is expected
     assert calls == 1
+
+
+def test_distilbert_service_retries_remote_failure_after_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    clock = [100.0]
+    failed = runtime.DistilBertState(
+        runtime=None,
+        path=tmp_path / "cache",
+        manifest={},
+        error="temporary outage",
+    )
+    recovered = runtime.DistilBertState(
+        runtime=object(),
+        path=tmp_path / "cache",
+        manifest={"training_complete": True},
+    )
+
+    def fake_load(_settings: AppSettings, *_args: object, **_kwargs: object):
+        nonlocal calls
+        calls += 1
+        return failed if calls == 1 else recovered
+
+    monkeypatch.setattr(runtime, "load_distilbert_state", fake_load)
+    service = runtime.DistilBertService(
+        AppSettings(
+            distilbert_model_url="https://models.example/distilbert.zip",
+            model_retry_seconds=30,
+        ),
+        monotonic=lambda: clock[0],
+    )
+
+    assert service.get_state() is failed
+    clock[0] = 129.999
+    assert service.get_state() is failed
+    assert calls == 1
+
+    clock[0] = 130.0
+    assert service.get_state() is recovered
+    assert calls == 2

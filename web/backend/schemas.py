@@ -12,6 +12,19 @@ RiskLevel = Literal["low", "medium", "high"]
 ThreatLabel = Literal["ham", "phish", "spam"]
 Agreement = Literal["agreed", "disagreed", "unavailable", "partial"]
 ModelStatus = Literal["available", "unavailable", "error"]
+ModelLifecycle = Literal["loading", "retrying", "ready", "unavailable", "error"]
+ServiceStatus = Literal["starting", "ready", "limited", "unavailable"]
+FinalModel = Literal["tfidf_logreg", "distilbert"]
+FallbackReason = Literal["primary_unavailable", "primary_prediction_failed"]
+ScoreKind = Literal["uncalibrated_probability", "label_only"]
+ReviewReason = Literal[
+    "model_disagreement",
+    "primary_unavailable",
+    "primary_prediction_failed",
+    "input_truncated",
+    "suspicious_text_signals",
+    "low_model_score",
+]
 
 
 class HealthResponse(BaseModel):
@@ -24,9 +37,13 @@ class HealthResponse(BaseModel):
 class ModelAvailability(BaseModel):
     available: bool
     detail: str
+    state: ModelLifecycle
 
 
 class ReadyResponse(HealthResponse):
+    ready: bool
+    primary_ready: bool
+    service_status: ServiceStatus
     duel_ready: bool
     models: dict[str, ModelAvailability]
 
@@ -92,12 +109,28 @@ class ArtifactMetadata(BaseModel):
     metrics_file: str | None
 
 
+class InputMetadata(BaseModel):
+    """Non-sensitive facts about how the submitted text was processed."""
+
+    character_count: int
+    transformer_tokens: int | None
+    transformer_max_tokens: int
+    truncated: bool | None
+
+
 class VersionedPredictResponse(BaseModel):
     """Versioned result containing the two honest Model Duel outputs."""
 
     final_label: ThreatLabel
     final_risk_level: RiskLevel
     final_confidence: float | None
+    final_model: FinalModel
+    fallback_reason: FallbackReason | None
+    score_kind: ScoreKind
+    review_recommended: bool
+    review_reasons: list[ReviewReason]
+    input_metadata: InputMetadata
+    heuristic_signals: list[str]
     agreement: Agreement
     model_outputs: dict[str, ModelPredictionOutput]
     explanation: str

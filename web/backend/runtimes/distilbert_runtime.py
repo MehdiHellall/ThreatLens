@@ -10,9 +10,10 @@ import shutil
 import stat
 import tempfile
 import threading
+import time
 import urllib.parse
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from ipaddress import ip_address
@@ -28,6 +29,7 @@ from web.backend.settings import (
     AppSettings,
 )
 from web.backend.sklearn_runtime import (
+    TERMINAL_REMOTE_ERROR_MARKERS,
     ModelArtifactError,
     _download_model_artifact,
     file_sha256,
@@ -86,6 +88,9 @@ class DistilBertArtifactError(RuntimeError):
 class DistilBertPrediction:
     label: ThreatLabel
     probabilities: dict[str, float]
+    token_count: int | None = None
+    max_tokens: int | None = None
+    truncated: bool | None = None
 
 
 class DistilBertRuntime:
@@ -98,8 +103,17 @@ class DistilBertRuntime:
         self._inference_lock = threading.Lock()
 
     @classmethod
-    def from_directory(cls, path: Path, *, max_length: int) -> DistilBertRuntime:
-        validate_artifact_directory(path, expected_max_length=max_length)
+    def from_directory(
+        cls,
+        path: Path,
+        *,
+        max_length: int,
+        _validated_manifest: dict[str, object] | None = None,
+    ) -> DistilBertRuntime:
+        # Direct callers still receive full validation. The service loader passes
+        # the manifest it just validated to avoid hashing 268 MB of weights twice.
+        if _validated_manifest is None:
+            validate_artifact_directory(path, expected_max_length=max_length)
         _load_runtime_dependencies()
         tokenizer = AutoTokenizer.from_pretrained(
             path,
@@ -119,6 +133,7 @@ class DistilBertRuntime:
     def predict_one(self, text: str) -> DistilBertPrediction:
         """Classify one message using exact notebook tokenization and real logits."""
         with self._inference_lock:
+            token_count = self._token_count(text)
             encoded = self._tokenizer(
                 text,
                 truncation=True,
@@ -134,7 +149,22 @@ class DistilBertRuntime:
         return DistilBertPrediction(
             label=cast(ThreatLabel, ID2LABEL[winning_index]),
             probabilities=probabilities,
+            token_count=token_count,
+            max_tokens=self._max_length,
+            truncated=token_count > self._max_length if token_count is not None else None,
         )
+
+    def _token_count(self, text: str) -> int | None:
+        """Count pre-truncation tokens when the tokenizer exposes its standard encode API."""
+        encode = getattr(self._tokenizer, "encode", None)
+        if not callable(encode):
+            return None
+        try:
+            token_ids = encode(text, add_special_tokens=True, truncation=False)
+        except Exception:
+            # Token counting is explanatory metadata; it must never make inference fail.
+            return None
+        return len(token_ids) if isinstance(token_ids, (list, tuple)) else None
 
 
 def _load_runtime_dependencies() -> None:
@@ -627,6 +657,7 @@ def load_distilbert_state(
         classifier = DistilBertRuntime.from_directory(
             path,
             max_length=settings.distilbert_max_length,
+            _validated_manifest=manifest,
         )
     except DistilBertArtifactError as exc:
         return DistilBertState(runtime=None, path=path, manifest={}, error=str(exc))
@@ -641,25 +672,77 @@ def load_distilbert_state(
 
 
 class DistilBertService:
-    """Thread-safe one-time lazy loader for the optional transformer artifact."""
+    """Thread-safe lazy loader with bounded retries for remote artifacts."""
 
     def __init__(
         self,
         settings: AppSettings,
         downloader: ArtifactDownloader | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
         self._downloader = downloader
+        self._monotonic = monotonic
         self._lock = threading.Lock()
         self._state: DistilBertState | None = None
+        self._last_remote_attempt_at: float | None = None
+        self._warmup_thread: threading.Thread | None = None
+        self._warmup_start_lock = threading.Lock()
+
+    def _remote_retry_is_due(self, now: float) -> bool:
+        if (
+            self._state is None
+            or self._state.loaded
+            or self._settings.distilbert_model_url is None
+            or self._last_remote_attempt_at is None
+            or any(
+                marker in (self._state.error or "").casefold()
+                for marker in TERMINAL_REMOTE_ERROR_MARKERS
+            )
+        ):
+            return False
+        return now - self._last_remote_attempt_at >= self._settings.model_retry_seconds
 
     def get_state(self) -> DistilBertState:
-        if self._state is not None:
+        if self._state is not None and (
+            self._state.loaded or self._settings.distilbert_model_url is None
+        ):
             return self._state
         with self._lock:
-            if self._state is None:
+            if self._state is not None and (
+                self._state.loaded or self._settings.distilbert_model_url is None
+            ):
+                return self._state
+            now = self._monotonic()
+            retry_due = self._remote_retry_is_due(now)
+            if self._state is None or retry_due:
                 self._state = load_distilbert_state(self._settings, self._downloader)
+                if not self._state.loaded and self._settings.distilbert_model_url is not None:
+                    self._last_remote_attempt_at = self._monotonic()
             return self._state
+
+    def peek_state(self) -> DistilBertState | None:
+        """Return the current state without starting or waiting for a model load."""
+        state = self._state
+        if state is not None and self._remote_retry_is_due(self._monotonic()):
+            self.start_background_warmup()
+        return state
+
+    @property
+    def loading(self) -> bool:
+        return self._warmup_thread is not None and self._warmup_thread.is_alive()
+
+    def start_background_warmup(self) -> None:
+        """Start a single non-blocking transformer load."""
+        with self._warmup_start_lock:
+            if self._warmup_thread is not None and self._warmup_thread.is_alive():
+                return
+            self._warmup_thread = threading.Thread(
+                target=self.get_state,
+                name="threatlens-distilbert-warmup",
+                daemon=True,
+            )
+            self._warmup_thread.start()
 
 
 def public_manifest(manifest: dict[str, object]) -> dict[str, object]:
@@ -680,6 +763,27 @@ def public_manifest(manifest: dict[str, object]) -> dict[str, object]:
     }
 
 
+def public_evaluation_metrics(state: DistilBertState) -> dict[str, dict[str, float]] | None:
+    """Expose only bounded aggregate test metrics from a validated loaded artifact."""
+    if not state.loaded or state.path is None:
+        return None
+    try:
+        metrics = _read_json_object(state.path / "metrics.json", description="metrics")
+    except DistilBertArtifactError:
+        return None
+    raw_test = metrics.get("test")
+    if not isinstance(raw_test, Mapping):
+        return None
+    public_test: dict[str, float] = {}
+    for key in ("accuracy", "f1_macro", "precision_macro", "recall_macro"):
+        value = raw_test.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+            if math.isfinite(numeric) and 0.0 <= numeric <= 1.0:
+                public_test[key] = numeric
+    return {"test": public_test} if public_test else None
+
+
 __all__ = [
     "DistilBertArtifactError",
     "DistilBertPrediction",
@@ -687,6 +791,7 @@ __all__ = [
     "DistilBertService",
     "DistilBertState",
     "load_distilbert_state",
+    "public_evaluation_metrics",
     "public_manifest",
     "resolve_distilbert_artifact",
     "safe_extract_zip",

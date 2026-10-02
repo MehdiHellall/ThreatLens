@@ -9,22 +9,17 @@ RUN pnpm install --frozen-lockfile
 
 COPY web/frontend ./
 
-ARG VITE_API_BASE_URL
-ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
-
 RUN pnpm build
 
 FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
 
-ARG VITE_API_BASE_URL
-
 COPY web/frontend/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
-RUN sed -i "s|__THREATLENS_API_ORIGIN__|${VITE_API_BASE_URL}|g" /etc/nginx/conf.d/default.conf && \
-    touch /var/run/nginx.pid && \
+RUN touch /var/run/nginx.pid && \
     chown -R nginx:nginx /var/cache/nginx /var/run/nginx.pid /usr/share/nginx/html /etc/nginx/conf.d
 
 USER nginx
 
 EXPOSE 8080
+EXPOSE 8443

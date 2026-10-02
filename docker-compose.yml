@@ -6,24 +6,31 @@ services:
     environment:
       EMAIL_THREAT_MODEL_PATH: ${EMAIL_THREAT_MODEL_PATH-artifacts/tfidf_logreg.joblib}
       EMAIL_THREAT_MODEL_URL: ${EMAIL_THREAT_MODEL_URL:-}
-      EMAIL_THREAT_MODEL_SHA256: ${EMAIL_THREAT_MODEL_SHA256:-}
-      EMAIL_THREAT_MODEL_CACHE_PATH: ${EMAIL_THREAT_MODEL_CACHE_PATH:-/tmp/threatlens/model.joblib}
+      EMAIL_THREAT_MODEL_SHA256: ${EMAIL_THREAT_MODEL_SHA256:-d9ed306935e26c9bf7b285a861991bb3539be7089ad9d8bf798d781d01d45981}
+      EMAIL_THREAT_MODEL_CACHE_PATH: ${EMAIL_THREAT_MODEL_CACHE_PATH:-/var/cache/threatlens/model.joblib}
       EMAIL_THREAT_MODEL_RETRY_SECONDS: ${EMAIL_THREAT_MODEL_RETRY_SECONDS:-30}
       EMAIL_THREAT_MAX_ARTIFACT_BYTES: ${EMAIL_THREAT_MAX_ARTIFACT_BYTES:-1073741824}
-      EMAIL_THREAT_DISTILBERT_MODEL_PATH: ${EMAIL_THREAT_DISTILBERT_MODEL_PATH:-artifacts/distilbert}
+      EMAIL_THREAT_DISTILBERT_MODEL_PATH: ${EMAIL_THREAT_DISTILBERT_MODEL_PATH-artifacts/distilbert}
       EMAIL_THREAT_DISTILBERT_MODEL_URL: ${EMAIL_THREAT_DISTILBERT_MODEL_URL:-}
       EMAIL_THREAT_DISTILBERT_MODEL_SHA256: ${EMAIL_THREAT_DISTILBERT_MODEL_SHA256:-}
-      EMAIL_THREAT_DISTILBERT_MODEL_CACHE_PATH: ${EMAIL_THREAT_DISTILBERT_MODEL_CACHE_PATH:-/tmp/threatlens/distilbert}
+      EMAIL_THREAT_DISTILBERT_MODEL_CACHE_PATH: ${EMAIL_THREAT_DISTILBERT_MODEL_CACHE_PATH:-/var/cache/threatlens/distilbert}
       EMAIL_THREAT_DISTILBERT_MAX_LENGTH: ${EMAIL_THREAT_DISTILBERT_MAX_LENGTH:-128}
       EMAIL_THREAT_BACKGROUND_WARMUP: ${EMAIL_THREAT_BACKGROUND_WARMUP:-true}
       EMAIL_THREAT_RATE_LIMIT_PER_MINUTE: ${EMAIL_THREAT_RATE_LIMIT_PER_MINUTE:-60}
       EMAIL_THREAT_MAX_BODY_BYTES: ${EMAIL_THREAT_MAX_BODY_BYTES:-16384}
       EMAIL_THREAT_ALLOWED_ORIGINS: ${EMAIL_THREAT_ALLOWED_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
-    ports:
-      - "8000:8000"
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-2}
+      MKL_NUM_THREADS: ${MKL_NUM_THREADS:-2}
+      TOKENIZERS_PARALLELISM: "false"
+    expose:
+      - "8000"
     volumes:
       # Model artifacts are mounted read-only so the image stays small.
       - ./artifacts:/app/artifacts:ro
+      - model-cache:/var/cache/threatlens
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
     healthcheck:
       test:
         - CMD
@@ -33,16 +40,42 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
   frontend:
     build:
       context: .
       dockerfile: web/frontend/Dockerfile
-      args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
     depends_on:
       backend:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+      # Dedicated PROXY-protocol listener used only by Tailscale Funnel.
+      - "127.0.0.1:8081:8443"
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  model-cache:

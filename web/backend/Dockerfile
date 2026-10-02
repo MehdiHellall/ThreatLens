@@ -3,19 +3,22 @@ FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    EMAIL_THREAT_MODEL_PATH=artifacts/tfidf_logreg.joblib
+    VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-COPY artifacts/tfidf_logreg.joblib ./artifacts/tfidf_logreg.joblib
 COPY web/__init__.py ./web/__init__.py
 COPY web/backend ./web/backend
 
-RUN python -m pip install --upgrade pip && \
-    python -m pip install ".[web,distilbert-runtime]" && \
-    useradd --create-home --shell /usr/sbin/nologin threatlens
+RUN python -m pip install --no-cache-dir "uv==0.12.21" && \
+    uv sync --frozen --no-dev --extra web --extra distilbert-runtime \
+      --no-editable --compile-bytecode && \
+    useradd --create-home --shell /usr/sbin/nologin threatlens && \
+    mkdir -p /var/cache/threatlens && \
+    chown -R threatlens:threatlens /var/cache/threatlens
 
 EXPOSE 8000
 
@@ -24,4 +27,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 USER threatlens
 
-CMD ["python", "-m", "uvicorn", "web.backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "web.backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]

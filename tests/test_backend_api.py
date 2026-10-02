@@ -193,6 +193,7 @@ def test_api_responses_include_security_headers(artifact_path: Path) -> None:
     assert response.headers["Referrer-Policy"] == "no-referrer"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Cache-Control"] == "no-store"
+    assert len(response.headers["X-Request-ID"]) == 32
 
 
 @pytest.mark.parametrize("route", ["/predict", "/v1/predict"])
@@ -216,6 +217,22 @@ def test_predict_rejects_oversized_request_before_prediction(
     client = TestClient(app)
 
     response = client.post(route, json={"text": "verify account password"})
+
+    assert response.status_code == 413
+    assert "16 bytes or fewer" in response.json()["detail"]
+
+
+def test_predict_checks_actual_body_size_when_content_length_is_incorrect(
+    artifact_path: Path,
+) -> None:
+    app = create_app(AppSettings(model_path=artifact_path, max_body_bytes=16))
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/predict",
+        content=b'{"text":"verify account password"}',
+        headers={"Content-Type": "application/json", "Content-Length": "1"},
+    )
 
     assert response.status_code == 413
     assert "16 bytes or fewer" in response.json()["detail"]
@@ -259,6 +276,7 @@ def test_predict_rate_limits_repeated_requests(artifact_path: Path, route: str) 
     assert first.status_code == 200
     assert second.status_code == 429
     assert "Too many prediction requests" in second.json()["detail"]
+    assert second.headers["Retry-After"] == "60"
 
 
 def test_predict_returns_real_classifier_result(artifact_path: Path) -> None:
@@ -273,7 +291,7 @@ def test_predict_returns_real_classifier_result(artifact_path: Path) -> None:
     assert body["label"] == "phish"
     assert body["probabilities"] == {"ham": 0.03, "phish": 0.92, "spam": 0.05}
     assert body["risk_level"] == "high"
-    assert "trained model classified" in body["explanation"]
+    assert "model classified" in body["explanation"]
     assert "Do not click" in body["suggested_action"]
 
 
@@ -393,8 +411,9 @@ def test_v1_predict_has_duel_ready_shape_and_preserves_legacy_result(
         "probabilities": {"ham": 0.03, "phish": 0.92, "spam": 0.05},
         "risk_level": "high",
         "explanation": (
-            "The trained model classified this message as phish with 92% confidence. "
-            "Transparent text signals observed: urgency, credential request."
+            "The model classified this message as phish with a 92% model score. "
+            "A separate keyword check observed: urgency, credential request; these signals "
+            "are not an explanation of the model's reasoning."
         ),
         "suggested_action": (
             "Do not click links or share credentials. Verify the request through a trusted "
@@ -410,6 +429,13 @@ def test_v1_predict_has_duel_ready_shape_and_preserves_legacy_result(
         "final_label",
         "final_risk_level",
         "final_confidence",
+        "final_model",
+        "fallback_reason",
+        "score_kind",
+        "review_recommended",
+        "review_reasons",
+        "input_metadata",
+        "heuristic_signals",
         "agreement",
         "model_outputs",
         "explanation",
@@ -447,6 +473,18 @@ def test_v1_predict_has_duel_ready_shape_and_preserves_legacy_result(
     assert body["final_label"] == expected_legacy["label"]
     assert body["final_risk_level"] == expected_legacy["risk_level"]
     assert body["final_confidence"] == expected_legacy["probabilities"]["phish"]
+    assert body["final_model"] == "tfidf_logreg"
+    assert body["fallback_reason"] == "primary_unavailable"
+    assert body["score_kind"] == "uncalibrated_probability"
+    assert body["review_recommended"] is True
+    assert body["review_reasons"] == ["primary_unavailable", "suspicious_text_signals"]
+    assert body["input_metadata"] == {
+        "character_count": len(payload["text"]),
+        "transformer_tokens": None,
+        "transformer_max_tokens": 128,
+        "truncated": None,
+    }
+    assert body["heuristic_signals"] == ["urgency", "credential request"]
     assert body["model_outputs"]["tfidf_logreg"] == {
         "status": "available",
         "label": expected_legacy["label"],
@@ -490,6 +528,84 @@ def test_v1_duel_agreement_selects_real_distilbert_result(artifact_path: Path) -
     assert "DistilBERT" in body["explanation"]
 
 
+def test_v1_predict_uses_primary_when_tfidf_is_unavailable(tmp_path: Path) -> None:
+    state, _runtime = _distilbert_state(
+        prediction=distilbert_runtime.DistilBertPrediction(
+            label="ham",
+            probabilities={"ham": 0.9, "phish": 0.04, "spam": 0.06},
+            token_count=23,
+            max_tokens=128,
+            truncated=False,
+        )
+    )
+    client = _duel_client(tmp_path / "missing.joblib", state)
+
+    response = client.post("/v1/predict", json={"text": "Routine meeting update."})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["final_label"] == "ham"
+    assert body["final_model"] == "distilbert"
+    assert body["fallback_reason"] is None
+    assert body["agreement"] == "unavailable"
+    assert body["model_outputs"]["tfidf_logreg"]["status"] == "unavailable"
+    assert body["model_outputs"]["distilbert"]["status"] == "available"
+    assert body["input_metadata"] == {
+        "character_count": 23,
+        "transformer_tokens": 23,
+        "transformer_max_tokens": 128,
+        "truncated": False,
+    }
+
+
+def test_v1_predict_escalates_suspicious_ham_without_changing_model_label(
+    tmp_path: Path,
+) -> None:
+    state, _runtime = _distilbert_state(
+        prediction=distilbert_runtime.DistilBertPrediction(
+            label="ham",
+            probabilities={"ham": 0.98, "phish": 0.01, "spam": 0.01},
+        )
+    )
+    client = _duel_client(tmp_path / "missing.joblib", state)
+
+    response = client.post(
+        "/v1/predict",
+        json={"text": "Urgent: verify your account password at https://example.com now."},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["final_label"] == "ham"
+    assert body["final_confidence"] == 0.98
+    assert body["final_risk_level"] == "medium"
+    assert body["review_reasons"] == ["suspicious_text_signals"]
+    assert "Do not use links or provide credentials" in body["suggested_action"]
+
+
+def test_v1_ready_is_healthy_when_only_primary_can_serve(tmp_path: Path) -> None:
+    state, _runtime = _distilbert_state(
+        prediction=distilbert_runtime.DistilBertPrediction(
+            label="ham",
+            probabilities={"ham": 0.9, "phish": 0.04, "spam": 0.06},
+        )
+    )
+    client = _duel_client(tmp_path / "missing.joblib", state)
+
+    response = client.get("/v1/ready")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["ready"] is True
+    assert body["primary_ready"] is True
+    assert body["model_loaded"] is False
+    assert body["duel_ready"] is False
+    assert body["service_status"] == "limited"
+    assert body["models"]["tfidf_logreg"]["state"] == "error"
+    assert body["models"]["distilbert"]["state"] == "ready"
+
+
 def test_v1_duel_disagreement_is_visible_and_distilbert_is_final(
     artifact_path: Path,
 ) -> None:
@@ -516,6 +632,8 @@ def test_v1_duel_disagreement_is_visible_and_distilbert_is_final(
     assert "spam" in body["suggested_action"].casefold()
     assert "disagree" in body["explanation"].casefold()
     assert "manual" in body["explanation"].casefold()
+    assert body["review_recommended"] is True
+    assert body["review_reasons"] == ["model_disagreement", "suspicious_text_signals"]
 
 
 def test_v1_duel_unavailable_falls_back_without_inventing_probabilities(
@@ -562,8 +680,92 @@ def test_v1_duel_runtime_failure_is_partial_and_does_not_leak_error(
     assert body["final_label"] == "phish"
     assert body["model_outputs"]["distilbert"]["status"] == "error"
     assert body["model_outputs"]["distilbert"]["label"] is None
+    assert body["final_model"] == "tfidf_logreg"
+    assert body["fallback_reason"] == "primary_prediction_failed"
+    assert body["review_reasons"] == [
+        "primary_prediction_failed",
+        "suspicious_text_signals",
+    ]
     assert "secret submitted" not in str(body)
     assert "C:/private" not in str(body)
+
+
+def test_v1_predict_reports_truncation_and_requires_review(artifact_path: Path) -> None:
+    state, _runtime = _distilbert_state(
+        prediction=distilbert_runtime.DistilBertPrediction(
+            label="phish",
+            probabilities={"ham": 0.05, "phish": 0.88, "spam": 0.07},
+            token_count=241,
+            max_tokens=128,
+            truncated=True,
+        )
+    )
+
+    response = _duel_client(artifact_path, state).post(
+        "/v1/predict",
+        json={"text": "Urgent password reset required verify account."},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["input_metadata"]["transformer_tokens"] == 241
+    assert body["input_metadata"]["transformer_max_tokens"] == 128
+    assert body["input_metadata"]["truncated"] is True
+    assert body["review_recommended"] is True
+    assert body["review_reasons"] == ["input_truncated", "suspicious_text_signals"]
+
+
+def test_v1_predict_marks_low_model_score_for_review(artifact_path: Path) -> None:
+    state, _runtime = _distilbert_state(
+        prediction=distilbert_runtime.DistilBertPrediction(
+            label="phish",
+            probabilities={"ham": 0.31, "phish": 0.4, "spam": 0.29},
+        )
+    )
+
+    response = _duel_client(artifact_path, state).post(
+        "/v1/predict",
+        json={"text": "Urgent password reset required verify account."},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["final_model"] == "distilbert"
+    assert response.json()["review_reasons"] == ["suspicious_text_signals", "low_model_score"]
+
+
+def test_v1_predict_rejects_inconsistent_primary_probabilities_and_falls_back(
+    artifact_path: Path,
+) -> None:
+    state, _runtime = _distilbert_state(
+        prediction=distilbert_runtime.DistilBertPrediction(
+            label="spam",
+            probabilities={"ham": 0.8, "phish": 0.1, "spam": 0.1},
+        )
+    )
+
+    response = _duel_client(artifact_path, state).post(
+        "/v1/predict",
+        json={"text": "Urgent password reset required verify account."},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["final_model"] == "tfidf_logreg"
+    assert body["fallback_reason"] == "primary_prediction_failed"
+    assert body["model_outputs"]["distilbert"]["status"] == "error"
+
+
+def test_v1_predict_returns_sanitized_503_when_neither_model_can_serve(
+    tmp_path: Path,
+) -> None:
+    state, _runtime = _distilbert_state(load_error="private failure at C:/users/example/model")
+    client = _duel_client(tmp_path / "missing.joblib", state)
+
+    response = client.post("/v1/predict", json={"text": "hello"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "No prediction model is currently available."}
+    assert "C:/users" not in response.text
 
 
 def test_legacy_predict_stays_tfidf_only_and_never_invokes_distilbert(

@@ -17,7 +17,7 @@ const frontendServer = usePreviewBuild
   : {
       command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${frontendPort}`,
       env: {
-        VITE_API_BASE_URL: backendUrl,
+        VITE_API_PROXY_TARGET: backendUrl,
       },
       url: frontendUrl,
       reuseExistingServer: !process.env.CI,
@@ -38,6 +38,7 @@ const webServers = useExistingServers
 
 export default defineConfig({
   testDir: "./e2e",
+  timeout: 180_000,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,

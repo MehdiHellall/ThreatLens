@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
 const backendPort = process.env.E2E_BACKEND_PORT ?? "8787";
+const baselineSha256 = "d9ed306935e26c9bf7b285a861991bb3539be7089ad9d8bf798d781d01d45981";
 const pythonCandidates = [
   path.join(repoRoot, ".venv", "Scripts", "python.exe"),
   path.join(repoRoot, ".venv", "bin", "python"),
@@ -16,9 +17,11 @@ const env = {
   ...process.env,
   EMAIL_THREAT_ALLOWED_ORIGINS: `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "5174"}`,
 };
+env.EMAIL_THREAT_BACKGROUND_WARMUP ??= "true";
 
 if (!env.EMAIL_THREAT_MODEL_PATH && !env.EMAIL_THREAT_MODEL_URL) {
   env.EMAIL_THREAT_MODEL_PATH = path.join(repoRoot, "artifacts", "tfidf_logreg.joblib");
+  env.EMAIL_THREAT_MODEL_SHA256 = baselineSha256;
 }
 
 if (
