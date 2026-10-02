@@ -82,6 +82,55 @@ def test_clean_dry_run_command_does_not_remove_outputs(
     assert cache.is_dir()
 
 
+def test_lfs_pull_is_skipped_when_artifacts_are_materialized(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for relative_path in threatlens.LFS_ARTIFACT_PATHS:
+        artifact = tmp_path / relative_path
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(b"real artifact bytes")
+    monkeypatch.setattr(threatlens, "ROOT", tmp_path)
+
+    assert threatlens._artifacts_need_lfs_pull() is False
+
+
+def test_lfs_pull_is_requested_for_pointer_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pointer = tmp_path / threatlens.LFS_ARTIFACT_PATHS[0]
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(
+        "version https://git-lfs.github.com/spec/v1\n"
+        "oid sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
+        "size 123\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(threatlens, "ROOT", tmp_path)
+
+    assert threatlens._artifacts_need_lfs_pull() is True
+
+
+def test_ensure_lfs_artifacts_pulls_only_when_needed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+    monkeypatch.setattr(threatlens, "_artifacts_need_lfs_pull", lambda: True)
+
+    def record_run(command, **_kwargs):
+        commands.append(tuple(command))
+
+    monkeypatch.setattr(threatlens, "_run", record_run)
+
+    threatlens._ensure_lfs_artifacts()
+
+    assert commands == [
+        ("git", "lfs", "install", "--local"),
+        ("git", "lfs", "pull"),
+    ]
+
+
 def test_wait_for_demo_requires_full_two_model_readiness(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

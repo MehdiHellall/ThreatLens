@@ -22,6 +22,12 @@ DEMO_URL = "http://127.0.0.1:8080"
 READY_URL = f"{DEMO_URL}/api/v1/ready"
 FUNNEL_TARGET = "tcp://127.0.0.1:8081"
 BASELINE_SHA256 = "d9ed306935e26c9bf7b285a861991bb3539be7089ad9d8bf798d781d01d45981"
+LFS_ARTIFACT_PATHS = (
+    "artifacts/tfidf_logreg.joblib",
+    "artifacts/distilbert/model.safetensors",
+    "artifacts/distilbert/tokenizer.json",
+    "artifacts/distilbert/training_args.bin",
+)
 SAFE_CLEAN_PATHS = (
     ".coverage",
     ".pytest_cache",
@@ -121,6 +127,30 @@ def _validate_artifacts() -> None:
     )
 
 
+def _is_lfs_pointer(path: Path) -> bool:
+    try:
+        header = path.read_bytes()[:128]
+    except OSError:
+        return False
+    return header.startswith(b"version https://git-lfs.github.com/spec/v1")
+
+
+def _artifacts_need_lfs_pull() -> bool:
+    for relative_path in LFS_ARTIFACT_PATHS:
+        path = ROOT / relative_path
+        if not path.exists() or _is_lfs_pointer(path):
+            return True
+    return False
+
+
+def _ensure_lfs_artifacts() -> None:
+    if not _artifacts_need_lfs_pull():
+        return
+    print("[info] Fetching model artifacts with Git LFS...")
+    _run(("git", "lfs", "install", "--local"), capture=True)
+    _run(("git", "lfs", "pull"))
+
+
 def doctor(*, require_artifacts: bool = True) -> None:
     """Check the host before doing an expensive Docker build."""
     _require_command("docker", "Install Docker Engine using the README instructions.")
@@ -146,6 +176,7 @@ def doctor(*, require_artifacts: bool = True) -> None:
         print(f"[ok] {label}")
 
     if require_artifacts:
+        _ensure_lfs_artifacts()
         _validate_artifacts()
 
     disk_free = shutil.disk_usage(ROOT).free / 1024**3
